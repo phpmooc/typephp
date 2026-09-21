@@ -17,6 +17,7 @@ use PhpParser\Node\Expr\Variable;
 use PhpParser\NodeAbstract;
 use TypePhp\Metadata\Constants;
 use TypePhp\Exception\PlaceHolder;
+use TypePhp\Resolver\Reflection;
 
 trait FunctionCallTrait
 {
@@ -191,6 +192,7 @@ trait FunctionCallTrait
     protected function parseFuncCall(Expr\FuncCall $expr): string
     {
         $runtimeCallScope = null;
+        $runtimeResultType = null;
         $this->validateImmutableCall($expr);
         $pythonCall = $this->parsePythonFunctionCall($expr);
         if ($pythonCall !== null) {
@@ -379,6 +381,12 @@ trait FunctionCallTrait
                 CompilationStatistics::RUNTIME_FUNCTIONS,
                 strtolower($globalName),
             );
+            if ($functionTarget['definitelyGlobal'] && $this->isInternalFunction($globalName)) {
+                $returnType = Reflection::getFunction($globalName)?->getReturnType();
+                if ($returnType instanceof \ReflectionNamedType && !$returnType->allowsNull()) {
+                    $runtimeResultType = $this->detectFuncCallReturnType($globalName);
+                }
+            }
             $placeHolder = $this->getLiteralString($functionTarget['target']);
             $fn = $this->getFuncPtr($name);
             if ($this->debug) {
@@ -399,18 +407,24 @@ trait FunctionCallTrait
                 return 'typephp_call_cached(' . $fn . ', ' . $this->getFunctionCallCache() . ')';
             }
             $scopeArg = $runtimeCallScope === null ? '' : $runtimeCallScope . ', ';
-            return 'php::call(' . $scopeArg . $fn . ')';
+            return $this->convertRuntimeCallResult(
+                $runtimeResultType,
+                'php::call(' . $scopeArg . $fn . ')',
+            );
         }
         try {
             if ($name === '' && $runtimeCallScope === null) {
                 return 'typephp_call_cached(' . $fn . ', ' . $this->getFunctionCallCache() . ', '
                     . $this->parseCallArgs($expr->args) . ')';
             }
-            return $this->genRuntimeFunctionCall(
-                $fn,
-                $expr->args,
-                $name,
-                scope: $runtimeCallScope ?? '',
+            return $this->convertRuntimeCallResult(
+                $runtimeResultType,
+                $this->genRuntimeFunctionCall(
+                    $fn,
+                    $expr->args,
+                    $name,
+                    scope: $runtimeCallScope ?? '',
+                ),
             );
         } catch (PlaceHolder) {
             return $this->genPlaceHolder($placeHolder);

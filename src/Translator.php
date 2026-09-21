@@ -11,6 +11,7 @@ namespace TypePhp;
 use Ajaxray\AnsiKit\AnsiTerminal;
 use Ajaxray\AnsiKit\Components\Progressbar;
 use MJS\TopSort\Implementations\StringSort;
+use TypePhp\Analysis\CompilationStatistics;
 use TypePhp\Analysis\LocalClosureAnalyzer;
 use TypePhp\Analysis\NativeObjectStackPromotionAnalyzer;
 use TypePhp\Analysis\SsaBuilder;
@@ -1774,12 +1775,13 @@ PHP_RSHUTDOWN_FUNCTION({$moduleName}) {
 }
 CODE;
 
-        if ($this->extensionDependencies === []) {
+        $extensionDependencies = $this->resolveExtensionDependencies();
+        if ($extensionDependencies === []) {
             $moduleHeader = '    STANDARD_MODULE_HEADER,';
         } else {
             $dependencyArray = $moduleName . '_module_deps';
             $code .= PHP_EOL . 'static const zend_module_dep ' . $dependencyArray . '[] = {' . PHP_EOL;
-            foreach ($this->extensionDependencies as $dependency) {
+            foreach ($extensionDependencies as $dependency) {
                 $code .= '    ZEND_MOD_REQUIRED(' . $this->genCharPtr($dependency, true) . ')' . PHP_EOL;
             }
             $code .= '    ZEND_MOD_END' . PHP_EOL . '};' . PHP_EOL;
@@ -1822,6 +1824,73 @@ CODE;
         $this->generatedProjectSources[$file] = true;
         $this->localHeaders = [];
         return $file;
+    }
+
+    /**
+     * Require every PHP extension that owns an internal function or class
+     * referenced by compiled sources. The compiler host supplies the ownership
+     * metadata via Reflection; Zend validates the resulting dependency list
+     * when the generated TypePHP module starts on the target host.
+     *
+     * @return list<string>
+     */
+    private function resolveExtensionDependencies(): array
+    {
+        $dependencies = $this->extensionDependencies;
+        $seen = [];
+        foreach ($dependencies as $dependency) {
+            $seen[strtolower($dependency)] = true;
+        }
+
+        foreach (array_keys($this->compilationStatistics->get(CompilationStatistics::FUNCTIONS)) as $function) {
+            $reflection = Reflection::getFunction(ltrim($function, '\\'));
+            if ($reflection === null || !$reflection->isInternal()) {
+                continue;
+            }
+            $this->appendExtensionDependency(
+                $dependencies,
+                $seen,
+                $reflection->getExtensionName(),
+            );
+        }
+
+        $classes = $this->referencedClasses;
+        foreach (array_keys($this->compilationStatistics->get(CompilationStatistics::CLASSES)) as $class) {
+            $classes[$class] = true;
+        }
+        ksort($classes, SORT_STRING);
+        foreach (array_keys($classes) as $class) {
+            $reflection = Reflection::getClass(ltrim($class, '\\'));
+            if ($reflection === null || !$reflection->isInternal()) {
+                continue;
+            }
+            $this->appendExtensionDependency(
+                $dependencies,
+                $seen,
+                $reflection->getExtensionName(),
+            );
+        }
+
+        return $dependencies;
+    }
+
+    /**
+     * @param list<string> $dependencies
+     * @param array<string, true> $seen
+     */
+    private function appendExtensionDependency(array &$dependencies, array &$seen, mixed $extension): void
+    {
+        if (!is_string($extension)
+            || $extension === ''
+            || Reflection::isTypePhpExtension($extension)
+        ) {
+            return;
+        }
+        $key = strtolower($extension);
+        if (!isset($seen[$key])) {
+            $dependencies[] = $extension;
+            $seen[$key] = true;
+        }
     }
 
     public function getModuleName(): string

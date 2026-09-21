@@ -678,6 +678,8 @@ class CompilerBase implements PropertyAccessContext
 
     /** Whole-program usage collected during the convert phase. */
     protected CompilationStatistics $compilationStatistics;
+    /** @var array<string, true> Fully resolved class names referenced by source code. */
+    protected array $referencedClasses = [];
 
     public function __construct(string $rootPath)
     {
@@ -963,6 +965,15 @@ class CompilerBase implements PropertyAccessContext
     public function getCompilationStatistics(): CompilationStatistics
     {
         return $this->compilationStatistics;
+    }
+
+    protected function recordReferencedClass(string $class): string
+    {
+        $class = ltrim($class, '\\');
+        if ($class !== '') {
+            $this->referencedClasses[$class] = true;
+        }
+        return $class;
     }
 
     /** Record value types that survived into an emitted translation unit. */
@@ -3472,6 +3483,18 @@ class CompilerBase implements PropertyAccessContext
                 }
                 if ($this->isNameExpr($expr->name)) {
                     $name = $this->parseIdentifier($expr->name);
+                    $functionTarget = $this->resolveStaticFunctionCallTarget($expr->name);
+                    $nativeFunction = $this->findNativeFunction($functionTarget['nativeLookup']);
+                    if ($nativeFunction !== false) {
+                        return $this->getFunction($nativeFunction)->returnType;
+                    }
+                    // An unqualified call in a namespace may resolve to a
+                    // runtime-provided namespaced function before PHP falls
+                    // back to the global builtin. Its return representation is
+                    // therefore dynamic when no compiled function was found.
+                    if ($functionTarget['namespacedFallback']) {
+                        return Type::VAR;
+                    }
                     $globalName = ltrim($name, '\\');
                     // Math function optimization: propagate Big* return types
                     if (in_array($name, ['abs', 'pow', 'sqrt', 'floor', 'ceil', 'round'], true)

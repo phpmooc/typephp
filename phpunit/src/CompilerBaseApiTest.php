@@ -667,6 +667,52 @@ YAML);
         );
     }
 
+    public function testInternalSymbolExtensionsAreDetectedAsModuleDependencies(): void
+    {
+        if (!extension_loaded('mbstring')) {
+            $this->markTestSkipped('mbstring extension is not available');
+        }
+
+        global $translator;
+        $translator = $this->compiler;
+        $this->compiler->setBuildMode(CompilerBase::BUILD_MODE_EXT);
+        $projectFile = $this->createProjectFile(<<<'YAML'
+sources:
+  - main.php
+extension-dependencies:
+  - MBSTRING
+YAML);
+        file_put_contents(dirname($projectFile) . '/main.php', <<<'PHP'
+<?php
+function main(): void
+{
+    strlen('typephp');
+    mb_strlen('类型');
+    DateTimeInterface::ATOM;
+    new ReflectionClass(stdClass::class);
+}
+PHP);
+        $files = $this->invokeMethod('parseProjectYaml', $projectFile);
+        $this->compiler->addFiles($files);
+        $generatedSources = [];
+        foreach ($files as $file) {
+            $this->compiler->prepareFile($file);
+            $generatedFile = $this->compiler->convertFile($file);
+            if ($generatedFile !== null) {
+                $generatedSources[] = file_get_contents($generatedFile);
+            }
+        }
+
+        $extension = file_get_contents($this->compiler->genExtension());
+
+        $this->assertStringContainsString('php::toInt(php::call(', implode("\n", $generatedSources));
+        $this->assertSame(1, substr_count($extension, 'ZEND_MOD_REQUIRED("MBSTRING")'));
+        $this->assertStringContainsString('ZEND_MOD_REQUIRED("Core")', $extension);
+        $this->assertStringContainsString('ZEND_MOD_REQUIRED("date")', $extension);
+        $this->assertStringContainsString('ZEND_MOD_REQUIRED("Reflection")', $extension);
+        $this->assertStringNotContainsString('ZEND_MOD_REQUIRED("mbstring")', $extension);
+    }
+
     public function testParseProjectYamlSupportsCustomFilenameAndRelativeBuildDir(): void
     {
         $projectFile = $this->createProjectFile(<<<'YAML'

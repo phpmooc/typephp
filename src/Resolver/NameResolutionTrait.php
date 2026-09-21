@@ -24,7 +24,7 @@ trait NameResolutionTrait
             $this->error('Class name can not be empty');
         }
         if ($class[0] === '\\') {
-            return ltrim($class, '\\');
+            return $this->recordReferencedClass($class);
         }
 
         $ns2 = explode('\\', trim($class, '\\'));
@@ -36,7 +36,7 @@ trait NameResolutionTrait
             if (count($ns2) > 1) {
                 $ns .= '\\' . implode('\\', array_slice($ns2, 1));
             }
-            return ltrim($ns, '\\');
+            return $this->recordReferencedClass($ns);
         }
 
         foreach ($this->useNamespaces as $useNamespace) {
@@ -53,7 +53,7 @@ trait NameResolutionTrait
         if (count($ns2) > 1) {
             foreach ($this->useNamespaces as $useNamespace) {
                 if (strcasecmp(trim($useNamespace, '\\'), $class) === 0) {
-                    return $class;
+                    return $this->recordReferencedClass($class);
                 }
             }
         }
@@ -62,10 +62,10 @@ trait NameResolutionTrait
             $currentNamespace = $this->namespace;
         }
         if (!empty($currentNamespace)) {
-            return trim($currentNamespace, '\\') . '\\' . $class;
+            return $this->recordReferencedClass(trim($currentNamespace, '\\') . '\\' . $class);
         }
 
-        return $class;
+        return $this->recordReferencedClass($class);
     }
 
     /**
