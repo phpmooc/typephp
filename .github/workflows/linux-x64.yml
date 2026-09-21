@@ -329,9 +329,19 @@ jobs:
         run: |
           test -f ./tpc
           test -f "${PHPX_HOME}/lib/libphpx.so"
+          test -f third_party/phpy/modules/phpy.so
           test -f "${PHP_HOME}/lib/libphp.so"
           chmod +x ./tpc
           echo "LD_LIBRARY_PATH=${PHPX_HOME}/lib:${PHP_HOME}/lib" >> "${GITHUB_ENV}"
+
+      - name: Enable phpy extension for compiler
+        shell: bash
+        run: |
+          php_ini_dir="$(php-config --ini-dir)"
+          echo "extension=${GITHUB_WORKSPACE}/third_party/phpy/modules/phpy.so" \
+            | sudo tee "${php_ini_dir}/90-phpy.ini"
+          echo "PHP_INI_SCAN_DIR=${php_ini_dir}" >> "${GITHUB_ENV}"
+          php --ri phpy
 
       - name: Run EXT/LIB integration tests
         shell: bash
