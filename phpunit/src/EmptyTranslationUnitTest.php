@@ -118,9 +118,12 @@ PHP);
         $this->compiler->prepareFile($source);
         $sources = $this->compiler->convert([$source]);
 
-        self::assertCount(1, $sources);
-        self::assertStringContainsString('extension-app.cc', $sources[0]);
-        self::assertFileExists($sources[0]);
+        self::assertCount(2, $sources);
+        self::assertContains($this->compiler->getBuildDir() . '/extension-app.cc', $sources);
+        self::assertContains($this->compiler->getBuildDir() . '/embedded-opcodes-app.cc', $sources);
+        foreach ($sources as $generatedSource) {
+            self::assertFileExists($generatedSource);
+        }
         self::assertFileDoesNotExist($this->compiler->getCppFile($source));
     }
 

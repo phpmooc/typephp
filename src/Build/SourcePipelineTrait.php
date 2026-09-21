@@ -1114,7 +1114,7 @@ PHP
             // Nano keeps the ordinary statically registered Zend class/module
             // metadata, then adds a direct native process entry beside it.
             $sourceFiles[] = $this->genExtension();
-            if ($this->isBuildModeBin() && !$this->isNanoMode()) {
+            if ($this->isBuildModeEmbed() && !$this->isNanoMode()) {
                 array_push($sourceFiles, ...$this->genEmbeddedOpcodeTable());
             }
             if ($this->isNanoMode()) {
