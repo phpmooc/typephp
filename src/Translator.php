@@ -2218,19 +2218,15 @@ CODE;
             $sourceFiles[] = $this->getPhpxDir() . '/src/misc/typephp_main.cc';
             if ($this->bundledFiles !== [] || $this->embeddedOpcodeFiles !== []) {
                 $sourceFiles[] = $this->getPhpxDir() . '/src/misc/typephp_opcode_table.cc';
-                $versionHeader = $this->isWindows()
-                    ? $this->getPhpDir() . '/SDK/include/main/php_version.h'
-                    : $this->getPhpDir() . '/include/php/main/php_version.h';
-                $versionText = is_file($versionHeader) ? file_get_contents($versionHeader) : '';
-                if (!preg_match('/#define PHP_VERSION_ID\s+(\d+)/', $versionText, $versionMatch)) {
-                    throw new \RuntimeException("Cannot determine the target PHP version from {$versionHeader}");
+                // Select the decoder for the PHP CLI that generated the blobs.
+                // Distribution PHP headers need not live under the PHP prefix.
+                $this->getOpcodeBuildExtensionArgs();
+                if (!preg_match('/^8\.(4|5)\./', $this->opcodeBuildPhpVersion, $versionMatch)) {
+                    throw new \RuntimeException(
+                        "Unsupported opcode decoder PHP version: {$this->opcodeBuildPhpVersion}",
+                    );
                 }
-                $targetPhpVersion = (int) $versionMatch[1];
-                $decoder = match (true) {
-                    $targetPhpVersion >= 80400 && $targetPhpVersion < 80500 => 'opcode_unserialize_84.c',
-                    $targetPhpVersion >= 80500 && $targetPhpVersion < 80600 => 'opcode_unserialize_85.c',
-                    default => throw new \RuntimeException("Unsupported opcode decoder PHP version: {$targetPhpVersion}"),
-                };
+                $decoder = 'opcode_unserialize_8' . $versionMatch[1] . '.c';
                 $sourceFiles[] = $this->getPhpxDir() . '/thirdparty/opcache/' . $decoder;
             }
         }
