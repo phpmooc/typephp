@@ -83,7 +83,7 @@ trait FuncCallOptimizer
             'is_scalar', 'is_numeric', 'is_countable', 'is_iterable',
             'array_is_list', 'is_dir', 'is_file', 'file_exists', 'realpath',
             'in_array', 'array_search',
-            'strtotime', 'md5', 'sha1', 'hash', 'print_r',
+            'md5', 'sha1', 'hash', 'print_r',
             'base64_encode', 'base64_decode',
             'urlencode', 'urldecode', 'rawurlencode', 'rawurldecode',
             'json_encode', 'json_decode', 'serialize', 'unserialize',
