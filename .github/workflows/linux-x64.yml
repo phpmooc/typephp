@@ -481,10 +481,32 @@ jobs:
           c++ --version
 
       - name: Run compiler PHPT suite with bootstrap compiler
+        shell: bash
+        env:
+          TYPEPHP_OBSERVED_BINARY: ./tpc
+          TYPEPHP_TPC_METRICS_FILE: ${{ github.workspace }}/build/phpt-metrics/tpc-invocations.tsv
         run: |
-          mkdir -p build
-          php run-tests.php -q -j8 --compiler ./tpc \
+          mkdir -p build/phpt-metrics
+          .github/scripts/observe-command.sh build/phpt-metrics -- \
+            php run-tests.php -q -j8 --compiler .github/scripts/observe-tpc.sh \
             -w build/failed-tests.txt -W build/test-results.txt tests/compiler
+
+      - name: Summarize PHPT compiler metrics
+        if: always()
+        shell: bash
+        run: |
+          python3 .github/scripts/summarize-tpc-metrics.py \
+            build/phpt-metrics/tpc-invocations.tsv \
+            | tee build/phpt-metrics/tpc-invocations-summary.txt
+
+      - name: Upload PHPT performance metrics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phpt-metrics-linux-x64-php-${{ matrix.php }}-zts
+          if-no-files-found: warn
+          retention-days: 14
+          path: build/phpt-metrics
 
       - name: Package tested Linux compiler
         if: startsWith(github.ref, 'refs/tags/') && matrix.php == '8.5'
