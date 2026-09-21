@@ -322,6 +322,10 @@ For multi-file projects, keep repeatable build settings in `project.yml`:
 ```yaml
 name: myapp
 mode: bin
+version: 1.0.0
+info:
+  Author: TypePHP Team
+  Description: My TypePHP application
 php-version: "8.5"
 optimize: 2
 job: 8
@@ -370,6 +374,8 @@ directory; conditional entries support `PHP_VERSION`, `PHP_VERSION_ID`, and
 `PHP_OS_FAMILY`. CLI arguments override their YAML counterparts. Native linker
 dependencies belong in `link-libs`; `ext-deps` writes `ZEND_MOD_REQUIRED`
 entries so Zend can reject loading when a required PHP extension is missing.
+`version` provides the Zend module version. The `info` mapping accepts arbitrary
+labels and values for the module's dedicated `phpinfo()` section.
 `embedded-files` accepts files or directories with the same conditional syntax.
 It is opt-in for embedded binary builds: all listed files are packed into the
 binary, and PHP files not successfully compiled from `sources` are stored as

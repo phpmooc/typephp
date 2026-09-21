@@ -523,6 +523,9 @@ class CompilerBase implements PropertyAccessContext
     protected array $projectObjectFiles = [];
     /** @var list<string> Required PHP modules recorded in zend_module_entry.deps. */
     protected array $extensionDependencies = [];
+    protected string $extensionVersion = '';
+    /** @var array<string, string> Custom rows shown in the module's phpinfo section. */
+    protected array $extensionInfo = [];
     protected bool $debug = false;
     protected bool $formatCode = false;   // --format: enable clang-format (disabled by default)
     protected bool $printBacktraceOnError = true;

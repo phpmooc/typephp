@@ -559,6 +559,10 @@ extension-dependencies:
   - pdo_mysql
   - curl
   - curl
+version: 1.2.3
+info:
+  Author: TypePHP Team
+  Description: Native PHP extension
 YAML);
 
         $this->invokeMethod('parseProjectYaml', $projectFile);
@@ -578,8 +582,27 @@ YAML);
         $this->assertSame(['curl', 'ssl'], $this->compiler->getLinkLibs());
         $this->assertSame(['/usr/local/lib', '/opt/custom/lib'], $this->compiler->getLinkPaths());
         $this->assertSame(['pdo_mysql', 'curl'], $this->compiler->getExtensionDependencies());
+        $this->assertSame('1.2.3', $this->getPropertyValue('extensionVersion'));
+        $this->assertSame([
+            'Author' => 'TypePHP Team',
+            'Description' => 'Native PHP extension',
+        ], $this->getPropertyValue('extensionInfo'));
         $this->assertSame('/tmp/project-build', $this->compiler->getBuildDir());
         $this->assertTrue($this->getPropertyValue('formatCode'));
+    }
+
+    public function testParseProjectYamlRejectsInvalidExtensionMetadata(): void
+    {
+        $projectFile = $this->createProjectFile(<<<'YAML'
+sources:
+  - main.php
+info:
+  - TypePHP Team
+YAML);
+
+        $this->expectException(TestError::class);
+        $this->expectExceptionMessage('`info` must be a mapping of labels to values');
+        $this->invokeMethod('parseProjectYaml', $projectFile);
     }
 
     public function testParseProjectYamlRejectsInvalidExtensionDependencies(): void
@@ -663,6 +686,74 @@ YAML);
             . "    STANDARD_MODULE_HEADER_EX,\n"
             . "    nullptr,\n"
             . "    typephp_app_module_deps,",
+            $extension,
+        );
+    }
+
+    public function testExtensionMetadataIsWrittenToModuleEntryAndPhpInfo(): void
+    {
+        global $translator;
+        $translator = $this->compiler;
+        $this->compiler->setBuildMode(CompilerBase::BUILD_MODE_EXT);
+        $projectFile = $this->createProjectFile(<<<'YAML'
+name: metadata_demo
+sources:
+  - main.php
+version: 2.4.1
+info:
+  Maintainer: 'TypePHP "Core" Team'
+  Description: 'Native PHP\C++ extension'
+  Stable: true
+YAML);
+        $files = $this->invokeMethod('parseProjectYaml', $projectFile);
+        $this->compiler->addFiles($files);
+        foreach ($files as $file) {
+            $this->compiler->prepareFile($file);
+            $this->compiler->convertFile($file);
+        }
+
+        $extension = file_get_contents($this->compiler->genExtension());
+
+        $this->assertStringContainsString('PHP_MINFO_FUNCTION(typephp_metadata_demo)', $extension);
+        $this->assertStringContainsString(
+            'php_info_print_table_header(2, "typephp_metadata_demo support", "enabled");',
+            $extension,
+        );
+        $this->assertStringContainsString('php_info_print_table_row(2, "Maintainer", "TypePHP \\"Core\\" Team");', $extension);
+        $this->assertStringContainsString('php_info_print_table_row(2, "Description", "Native PHP\\\\C++ extension");', $extension);
+        $this->assertStringContainsString('php_info_print_table_row(2, "Stable", "true");', $extension);
+        $this->assertStringContainsString(
+            "    PHP_MINFO(typephp_metadata_demo),\n"
+            . "    \"2.4.1\",\n"
+            . '    STANDARD_MODULE_PROPERTIES,',
+            $extension,
+        );
+    }
+
+    public function testExtensionWithoutMetadataKeepsNullInfoAndVersion(): void
+    {
+        global $translator;
+        $translator = $this->compiler;
+        $this->compiler->setBuildMode(CompilerBase::BUILD_MODE_EXT);
+        $projectFile = $this->createProjectFile(<<<'YAML'
+sources:
+  - main.php
+YAML);
+        $files = $this->invokeMethod('parseProjectYaml', $projectFile);
+        $this->compiler->addFiles($files);
+        foreach ($files as $file) {
+            $this->compiler->prepareFile($file);
+            $this->compiler->convertFile($file);
+        }
+
+        $extension = file_get_contents($this->compiler->genExtension());
+
+        $this->assertStringNotContainsString('PHP_MINFO_FUNCTION(typephp_app)', $extension);
+        $this->assertStringContainsString(
+            "    PHP_RSHUTDOWN(typephp_app),\n"
+            . "    nullptr,\n"
+            . "    nullptr,\n"
+            . '    STANDARD_MODULE_PROPERTIES,',
             $extension,
         );
     }

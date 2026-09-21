@@ -139,6 +139,25 @@ project-owned packaging step after tpc emits its ELF.
 Use `cxx-flags`, `c-flags`, `asm-flags`, and `ld-flags` for project-wide C++,
 C, assembler, and linker options.
 
+### Extension metadata
+
+An extension project can declare metadata in `project.yml`:
+
+```yaml
+name: my_extension
+mode: ext
+version: 1.0.0
+info:
+  Author: Example Team
+  Description: Example native extension
+  License: Apache-2.0
+```
+
+`version` is exposed through the Zend module entry, including
+`ReflectionExtension::getVersion()`. The `info` mapping accepts arbitrary row
+labels and scalar values. TypePHP preserves their order in the module's
+dedicated `phpinfo()` section.
+
 ### PHP Extension Dependencies
 
 When a program depends on other PHP extensions, the required modules can be written into the Zend module dependency table:

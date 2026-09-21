@@ -136,6 +136,24 @@ tpc 产出 ELF 后由项目自己的构建流程另行封装。
 使用 `cxx-flags`、`c-flags`、`asm-flags` 和 `ld-flags` 分别设置项目级
 C++、C、汇编和链接参数。
 
+### 扩展元数据
+
+扩展项目可以在 `project.yml` 中声明元数据：
+
+```yaml
+name: my_extension
+mode: ext
+version: 1.0.0
+info:
+  Author: Example Team
+  Description: Example native extension
+  License: Apache-2.0
+```
+
+`version` 会写入 Zend 模块入口，并可通过 `ReflectionExtension::getVersion()` 获取。
+`info` 映射接受任意行标签和标量值，TypePHP 会保持配置顺序，并将它们显示在模块独立的
+`phpinfo()` 区块中。
+
 ### PHP 扩展依赖
 
 程序依赖其他 PHP 扩展时，可以将必需模块写入 Zend 模块依赖表：

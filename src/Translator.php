@@ -1775,6 +1775,25 @@ PHP_RSHUTDOWN_FUNCTION({$moduleName}) {
 }
 CODE;
 
+        $moduleInfoFunction = 'nullptr';
+        $moduleVersion = $this->extensionVersion === ''
+            ? 'nullptr'
+            : $this->genCharPtr($this->extensionVersion, true);
+        if ($this->extensionVersion !== '' || $this->extensionInfo !== []) {
+            $moduleInfoFunction = 'PHP_MINFO(' . $moduleName . ')';
+            $code .= PHP_EOL . 'PHP_MINFO_FUNCTION(' . $moduleName . ') {' . PHP_EOL;
+            $code .= '    php_info_print_table_start();' . PHP_EOL;
+            $code .= '    php_info_print_table_header(2, '
+                . $this->genCharPtr($moduleName . ' support', true) . ', "enabled");' . PHP_EOL;
+            foreach ($this->extensionInfo as $label => $value) {
+                $code .= '    php_info_print_table_row(2, '
+                    . $this->genCharPtr($label, true) . ', '
+                    . $this->genCharPtr($value, true) . ');' . PHP_EOL;
+            }
+            $code .= '    php_info_print_table_end();' . PHP_EOL;
+            $code .= '}' . PHP_EOL;
+        }
+
         $extensionDependencies = $this->resolveExtensionDependencies();
         if ($extensionDependencies === []) {
             $moduleHeader = '    STANDARD_MODULE_HEADER,';
@@ -1798,8 +1817,8 @@ zend_module_entry {$moduleName}_module_entry = {
     PHP_MSHUTDOWN({$moduleName}),
     PHP_RINIT({$moduleName}),
     PHP_RSHUTDOWN({$moduleName}),
-    nullptr,
-    nullptr,
+    {$moduleInfoFunction},
+    {$moduleVersion},
     STANDARD_MODULE_PROPERTIES,
 };
 CODE;
@@ -3893,6 +3912,36 @@ CODE;
     {
         $cfg = $this->getProjectYamlLoader()->load($path);
         $projectDir = dirname($path);
+
+        if (array_key_exists('version', $cfg)) {
+            if (!is_string($cfg['version']) || trim($cfg['version']) === '') {
+                $this->error('`version` must be a non-empty string');
+            }
+            $this->extensionVersion = trim($cfg['version']);
+            if (str_contains($this->extensionVersion, "\0")) {
+                $this->error('`version` must not contain NUL bytes');
+            }
+        }
+
+        if (array_key_exists('info', $cfg)) {
+            if (!is_array($cfg['info']) || ($cfg['info'] !== [] && array_is_list($cfg['info']))) {
+                $this->error('`info` must be a mapping of labels to values');
+            }
+            foreach ($cfg['info'] as $label => $value) {
+                if (!is_string($label) || trim($label) === '') {
+                    $this->error('Each `info` label must be a non-empty string');
+                }
+                if (!is_scalar($value)) {
+                    $this->error("The `info` value for `{$label}` must be a scalar");
+                }
+                $label = trim($label);
+                $value = is_bool($value) ? ($value ? 'true' : 'false') : (string) $value;
+                if (str_contains($label, "\0") || str_contains($value, "\0")) {
+                    $this->error('`info` labels and values must not contain NUL bytes');
+                }
+                $this->extensionInfo[$label] = $value;
+            }
+        }
 
         $objects = $cfg['objects'] ?? [];
         if (!is_array($objects)) {
