@@ -28,7 +28,11 @@ function main(int $argc, array $argv): void
         );
     }
 
-    require_once dirname(__DIR__) . '/vendor/autoload.php';
+    // The PHP entrypoint already loaded Composer's project autoloader in
+    // bin/bootstrap.php. The native binary loads its embedded copy here.
+    if (!defined('TYPEPHP_PHP_SCRIPT_ENTRY')) {
+        require_once dirname(__DIR__) . '/vendor/autoload.php';
+    }
 
     $completionStatus = CompletionCommand::execute($argv);
     if ($completionStatus !== null) {

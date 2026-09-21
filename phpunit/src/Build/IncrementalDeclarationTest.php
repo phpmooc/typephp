@@ -380,7 +380,7 @@ PHP);
         $objects = [$firstObject, $secondObject];
         $this->invoke($compiler, 'writeLinkCache', $objects, $target);
         self::assertFileExists(
-            $this->buildDirectory . '/incremental-bin.typephp-link-cache',
+            $this->buildDirectory . '/cache/link/incremental-bin.typephp-link-cache',
         );
         self::assertFileDoesNotExist($target . '.typephp-link-cache');
         self::assertTrue($this->invoke($compiler, 'hasLinkCache', $objects, $target));

@@ -646,7 +646,10 @@ PHP
             } else {
                 $assembly = $this->getBuildDir() . '/embedded-files-' . $this->targetName . '.S';
                 $quotedArchive = json_encode($archive, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
-                $asmCode = "# archive-sha256: {$archiveHash}\n.section .rodata\n#ifdef __APPLE__\n.globl _typephp_embedded_archive_start\n.p2align 4\n_typephp_embedded_archive_start:\n#else\n.globl typephp_embedded_archive_start\n.p2align 4\ntypephp_embedded_archive_start:\n#endif\n.incbin {$quotedArchive}\n";
+                $section = $this->isMacos() ? '__TEXT,__const' : '.rodata';
+                $symbol = $this->isMacos()
+                    ? '_typephp_embedded_archive_start' : 'typephp_embedded_archive_start';
+                $asmCode = "# archive-sha256: {$archiveHash}\n.section {$section}\n.globl {$symbol}\n.p2align 4\n{$symbol}:\n.incbin {$quotedArchive}\n";
                 $this->writeFile($assembly, $asmCode);
                 $this->generatedProjectSources[$assembly] = true;
                 $sources[] = $assembly;
@@ -1111,7 +1114,7 @@ PHP
             // Nano keeps the ordinary statically registered Zend class/module
             // metadata, then adds a direct native process entry beside it.
             $sourceFiles[] = $this->genExtension();
-            if ($this->isBuildModeEmbed() && !$this->isNanoMode()) {
+            if ($this->isBuildModeBin() && !$this->isNanoMode()) {
                 array_push($sourceFiles, ...$this->genEmbeddedOpcodeTable());
             }
             if ($this->isNanoMode()) {
