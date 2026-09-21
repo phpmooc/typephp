@@ -1234,6 +1234,11 @@ class Translator extends Preprocessor
 
         if ($this->isBuildModeEmbed() && !$this->isNanoMode()) {
             $code .= '#include <typephp_runtime.h>' . PHP_EOL;
+            if ($this->bundledFiles === [] && $this->embeddedOpcodeFiles === []) {
+                // The runtime still calls these hooks; keep empty builds in this translation unit.
+                $code .= 'extern "C" void typephp_opcode_table_install(void) {}' . PHP_EOL;
+                $code .= 'extern "C" void typephp_opcode_table_uninstall(void) {}' . PHP_EOL;
+            }
         }
 
         if ($this->isBuildModeLib() && !$this->isWindows()) {

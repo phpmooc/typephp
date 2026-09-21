@@ -118,9 +118,13 @@ PHP);
         $this->compiler->prepareFile($source);
         $sources = $this->compiler->convert([$source]);
 
-        self::assertCount(2, $sources);
+        self::assertCount(1, $sources);
         self::assertContains($this->compiler->getBuildDir() . '/extension-app.cc', $sources);
-        self::assertContains($this->compiler->getBuildDir() . '/embedded-opcodes-app.cc', $sources);
+        self::assertNotContains($this->compiler->getBuildDir() . '/embedded-opcodes-app.cc', $sources);
+        self::assertStringContainsString(
+            'void typephp_opcode_table_install(void) {}',
+            file_get_contents($this->compiler->getBuildDir() . '/extension-app.cc'),
+        );
         foreach ($sources as $generatedSource) {
             self::assertFileExists($generatedSource);
         }

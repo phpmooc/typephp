@@ -1013,12 +1013,16 @@ PHP
                             && file_get_contents($anonymousManifest) === '[]') {
                             unlink($anonymousManifest);
                         }
-                        $needsAnonymousRefresh = is_file($legacyAnonymousManifest)
-                            || ($this->canEmbedAnonymousClassOpcode()
-                                && !is_file($anonymousManifest)
-                                && preg_match('/new\s+class\b/', (string) file_get_contents($path)) === 1);
-                        if (!$this->shouldRegeneratePhpFile($path) && !$needsAnonymousRefresh) {
-                            if ($this->canEmbedAnonymousClassOpcode()) {
+                        $shouldRegenerate = $this->shouldRegeneratePhpFile($path);
+                        $hasAnonymousManifest = is_file($anonymousManifest);
+                        $needsAnonymousRefresh = !$shouldRegenerate
+                            && (is_file($legacyAnonymousManifest)
+                                || ($hasAnonymousManifest
+                                    ? !$this->canEmbedAnonymousClassOpcode()
+                                    : (preg_match('/new\s+class\b/', (string) file_get_contents($path)) === 1
+                                        && $this->canEmbedAnonymousClassOpcode())));
+                        if (!$shouldRegenerate && !$needsAnonymousRefresh) {
+                            if ($hasAnonymousManifest) {
                                 $this->restoreAnonymousManifest($path);
                             }
                             $validSourceCount++;
@@ -1114,7 +1118,8 @@ PHP
             // Nano keeps the ordinary statically registered Zend class/module
             // metadata, then adds a direct native process entry beside it.
             $sourceFiles[] = $this->genExtension();
-            if ($this->isBuildModeEmbed() && !$this->isNanoMode()) {
+            if ($this->isBuildModeEmbed() && !$this->isNanoMode()
+                && ($this->bundledFiles !== [] || $this->embeddedOpcodeFiles !== [])) {
                 array_push($sourceFiles, ...$this->genEmbeddedOpcodeTable());
             }
             if ($this->isNanoMode()) {
