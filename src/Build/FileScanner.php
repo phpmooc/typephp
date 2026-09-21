@@ -127,9 +127,15 @@ class FileScanner
             \FilesystemIterator::SKIP_DOTS | \FilesystemIterator::FOLLOW_SYMLINKS,
         );
 
+        // SPL passes the current entry, key, and inner iterator. Keep the full
+        // signature because compiled callbacks validate their argument count.
         return new \RecursiveCallbackFilterIterator(
             $iterator,
-            fn(\SplFileInfo $entry): bool => !$this->closesLoop($entry),
+            fn(
+                \SplFileInfo $entry,
+                mixed $_key,
+                mixed $_iterator,
+            ): bool => !$this->closesLoop($entry),
         );
     }
 

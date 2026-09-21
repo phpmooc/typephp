@@ -7,7 +7,7 @@ use TypePhp\Config\ProjectYamlLoader;
 
 final class CompilerProjectConfigurationTest extends TestCase
 {
-    public function testOnlyReleaseCompilerEmbedsComposerRuntime(): void
+    public function testReleaseCompilerUsesProductionSettings(): void
     {
         $root = dirname(__DIR__, 2);
         $loader = new ProjectYamlLoader(
@@ -18,9 +18,11 @@ final class CompilerProjectConfigurationTest extends TestCase
         $release = $loader->load($root . '/project-release.yml');
 
         $this->assertArrayNotHasKey('embedded-files', $development);
+        $this->assertArrayNotHasKey('optimize', $development);
         $this->assertSame(['./vendor'], $release['embedded-files'] ?? null);
+        $this->assertSame(2, $release['optimize'] ?? null);
 
-        unset($release['embedded-files']);
+        unset($release['embedded-files'], $release['optimize']);
         $this->assertSame($development, $release);
     }
 }
