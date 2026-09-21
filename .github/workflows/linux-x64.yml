@@ -120,8 +120,10 @@ jobs:
         shell: bash
         run: |
           php_ini_dir="$(php-config --ini-dir)"
-          echo "extension=${GITHUB_WORKSPACE}/third_party/phpy/modules/phpy.so" \
-            | sudo tee "${php_ini_dir}/90-phpy.ini"
+          {
+            echo "extension=${GITHUB_WORKSPACE}/third_party/phpy/modules/phpy.so"
+            echo "phpy.enable_operator_overloading=0"
+          } | sudo tee "${php_ini_dir}/90-phpy.ini"
           echo "PHP_INI_SCAN_DIR=${php_ini_dir}" >> "${GITHUB_ENV}"
           php --ri phpy
 
@@ -231,8 +233,10 @@ jobs:
         shell: bash
         run: |
           php_ini_dir="$(php-config --ini-dir)"
-          echo "extension=${GITHUB_WORKSPACE}/third_party/phpy/modules/phpy.so" \
-            | sudo tee "${php_ini_dir}/90-phpy.ini"
+          {
+            echo "extension=${GITHUB_WORKSPACE}/third_party/phpy/modules/phpy.so"
+            echo "phpy.enable_operator_overloading=0"
+          } | sudo tee "${php_ini_dir}/90-phpy.ini"
           echo "PHP_INI_SCAN_DIR=${php_ini_dir}" >> "${GITHUB_ENV}"
           php --ri phpy
 
@@ -338,16 +342,19 @@ jobs:
         shell: bash
         run: |
           php_ini_dir="$(php-config --ini-dir)"
-          echo "extension=${GITHUB_WORKSPACE}/third_party/phpy/modules/phpy.so" \
-            | sudo tee "${php_ini_dir}/90-phpy.ini"
-          echo "PHP_INI_SCAN_DIR=${php_ini_dir}" >> "${GITHUB_ENV}"
-          php --ri phpy
+          {
+            echo "extension=${GITHUB_WORKSPACE}/third_party/phpy/modules/phpy.so"
+            echo "phpy.enable_operator_overloading=0"
+          } | sudo tee "${php_ini_dir}/90-phpy.ini"
+          echo "TYPEPHP_COMPILER_INI_SCAN_DIR=${php_ini_dir}" >> "${GITHUB_ENV}"
+          PHP_INI_SCAN_DIR="${php_ini_dir}" php --ri phpy
 
       - name: Run EXT/LIB integration tests
         shell: bash
         run: |
           php -n bin/run-integration-tests.php \
             --compiler=./tpc \
+            --compiler-ini-scan-dir="${TYPEPHP_COMPILER_INI_SCAN_DIR}" \
             --php="$(command -v php)" \
             --php-fpm="${PHP_FPM}"
 
@@ -450,8 +457,10 @@ jobs:
         shell: bash
         run: |
           php_ini_dir="$(php-config --ini-dir)"
-          echo "extension=${GITHUB_WORKSPACE}/third_party/phpy/modules/phpy.so" \
-            | sudo tee "${php_ini_dir}/90-phpy.ini"
+          {
+            echo "extension=${GITHUB_WORKSPACE}/third_party/phpy/modules/phpy.so"
+            echo "phpy.enable_operator_overloading=0"
+          } | sudo tee "${php_ini_dir}/90-phpy.ini"
           echo "PHP_INI_SCAN_DIR=${php_ini_dir}" >> "${GITHUB_ENV}"
           php --ri phpy
 
