@@ -149,6 +149,7 @@ jobs:
             third_party/phpx/lib/libphpx.so
             third_party/phpx/include/**
             third_party/phpx/src/misc/**
+            third_party/phpx/thirdparty/opcache/**
             third_party/phpx/thirdparty/mpdecimal/libmpdec/**
             third_party/phpx/thirdparty/mpdecimal/libmpdec++/**
             third_party/phpy/modules/phpy.so
