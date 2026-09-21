@@ -35,9 +35,6 @@ sources:
   - vendor/nikic/php-parser/lib/PhpParser/NodeVisitor.php
   - vendor/nikic/php-parser/lib/PhpParser/NodeVisitorAbstract.php
 
-embedded-files:
-  - ./vendor
-
 ignore:
   - ./src/Assert.php
   - ./src/polyfills.php

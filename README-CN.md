@@ -337,7 +337,20 @@ ext-deps:
   - curl
 ```
 
-路径以 YAML 文件所在目录为基准。source 可以是文件或目录；条件 source 支持
+项目文件可以通过 `include` 复用公共配置：
+
+```yaml
+include: project.yml
+embedded-files:
+  - vendor
+```
+
+`include` 可填写一个 YAML 路径或路径列表。被包含文件按顺序合并，当前文件最后覆盖；
+映射递归合并，列表整体替换。被包含文件可以继续包含下一级文件，但同一个规范化文件不能
+在一条尚未完成的 include 链中重复出现；已经完成解析的公共文件可以被后续 section 再次
+包含。项目中的相对路径统一以最外层项目文件为基准解析。
+
+路径以最外层项目 YAML 文件所在目录为基准。source 可以是文件或目录；条件 source 支持
 `PHP_VERSION`、`PHP_VERSION_ID` 和 `PHP_OS_FAMILY`。命令行参数优先于 YAML
 中的同名配置。原生链接依赖应写入 `link-libs`；`ext-deps` 会生成
 `ZEND_MOD_REQUIRED`，缺少所需 PHP 扩展时由 Zend 拒绝加载模块。
@@ -736,6 +749,15 @@ PHPT 是端到端测试。必须先构建自举编译器，并显式传给测试
 ```bash
 PHPX_HOME=/path/to/phpx php bin/tpc.php project.yml --job 2 --no-progress
 php run-tests.php -q -j8 --compiler ./tpc tests/compiler
+```
+
+`project.yml` 有意从磁盘加载 Composer 依赖。PHPT 每个用例都会启动一次编译器，
+如果把完整 Composer 运行时嵌入测试编译器，每个用例都会重复承担初始化开销。
+发布打包阶段安装生产依赖，并单独构建可独立运行的编译器：
+
+```bash
+composer install --no-dev --classmap-authoritative
+PHPX_HOME=/path/to/phpx php bin/tpc.php project-release.yml --job 2 --no-progress
 ```
 
 静态分析与从测试源码生成的覆盖矩阵是两项独立检查：

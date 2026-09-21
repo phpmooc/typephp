@@ -397,6 +397,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
               throw "Production Composer install failed with exit code $LASTEXITCODE"
           }
+          php bin\tpc.php project-release.yml --job 1 --no-progress
+          if ($LASTEXITCODE -ne 0) {
+              throw "Standalone TypePHP release build failed with exit code $LASTEXITCODE"
+          }
+          & .\tpc.exe --version
+          if ($LASTEXITCODE -ne 0) {
+              throw "Standalone TypePHP release compiler failed with exit code $LASTEXITCODE"
+          }
           $env:TYPEPHP_PACKAGE_VERSION = $env:GITHUB_REF_NAME
           php package.php
           if ($LASTEXITCODE -ne 0) {

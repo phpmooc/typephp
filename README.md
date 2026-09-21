@@ -369,7 +369,22 @@ ext-deps:
   - curl
 ```
 
-Paths are resolved relative to the YAML file. A source entry may be a file or
+Project files can reuse common settings with `include`:
+
+```yaml
+include: project.yml
+embedded-files:
+  - vendor
+```
+
+`include` accepts one YAML path or a list. Included files are applied in order,
+then the current file overrides them. Maps are merged recursively and lists are
+replaced as a whole. Included files may include another file, but the same
+canonical file cannot appear twice in one active include chain; this rejects
+cycles while allowing a completed common file to be included again by a later
+section. Relative project paths are resolved against the outermost project file.
+
+Paths are resolved relative to the outermost project YAML file. A source entry may be a file or
 directory; conditional entries support `PHP_VERSION`, `PHP_VERSION_ID`, and
 `PHP_OS_FAMILY`. CLI arguments override their YAML counterparts. Native linker
 dependencies belong in `link-libs`; `ext-deps` writes `ZEND_MOD_REQUIRED`
@@ -803,6 +818,16 @@ does not test the deployed compiler:
 ```bash
 PHPX_HOME=/path/to/phpx php bin/tpc.php project.yml --job 2 --no-progress
 php run-tests.php -q -j8 --compiler ./tpc tests/compiler
+```
+
+`project.yml` deliberately leaves Composer dependencies on disk. PHPT starts
+the compiler once per test, so embedding the complete Composer runtime would
+add its initialization cost to every case. Release packaging installs
+production dependencies and builds the standalone compiler separately:
+
+```bash
+composer install --no-dev --classmap-authoritative
+PHPX_HOME=/path/to/phpx php bin/tpc.php project-release.yml --job 2 --no-progress
 ```
 
 Static analysis and the source-derived coverage matrix are separate checks:
