@@ -365,7 +365,6 @@ trait IncrementalCompilationTrait
             'platform' => $this->targetPlatform,
             'literalStrings' => !$this->noLiteralStrings,
             'debug' => $this->debug,
-            'anonymousOpcode' => $this->canEmbedAnonymousClassOpcode(),
         ]));
 
         // New self-hosted compiler builds embed their immutable source snapshot.

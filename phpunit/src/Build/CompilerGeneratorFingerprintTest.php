@@ -21,6 +21,11 @@ final class CompilerGeneratorFingerprintTest extends TestCase
         $method = (new ReflectionClass(\TypePhp\Translator::class))->getMethod('getIncrementalGeneratorFingerprint');
         $native = $method->invoke($compiler);
         self::assertMatchesRegularExpression('/^[a-f0-9]{64}$/D', $native);
+        $reflection = new ReflectionClass($compiler);
+        while (!$reflection->hasProperty('opcodeBuildChecked')) {
+            $reflection = $reflection->getParentClass();
+        }
+        self::assertFalse($reflection->getProperty('opcodeBuildChecked')->getValue($compiler));
         self::assertSame($native, $method->invoke($compiler));
         define('TYPEPHP_PHP_SCRIPT_ENTRY', true);
         self::assertNotSame($native, $method->invoke($compiler));
