@@ -305,7 +305,7 @@ sources:
     if: PHP_OS_FAMILY == "Windows"
 
 # 将文件打包到二进制，并为 ZendVM 提供字节码及内存文件读取。
-bundled-files:
+embedded-files:
   - vendor
 
 # 由项目自身的原生构建流程预编译。
@@ -337,19 +337,27 @@ ext-deps:
 `PHP_VERSION`、`PHP_VERSION_ID` 和 `PHP_OS_FAMILY`。命令行参数优先于 YAML
 中的同名配置。原生链接依赖应写入 `link-libs`；`ext-deps` 会生成
 `ZEND_MOD_REQUIRED`，缺少所需 PHP 扩展时由 Zend 拒绝加载模块。
-`bundled-files` 支持与 `sources` 相同的文件、目录及条件写法，仅在显式配置时启用。
+`embedded-files` 支持与 `sources` 相同的文件、目录及条件写法，仅在显式配置时启用。
 所列文件全部打包进二进制；未通过 `sources` 成功原生编译的 PHP 文件由 OPcache
-生成字节码。运行时的 `require` 和 `require_once` 从内存交给 ZendVM 执行，
+生成字节码。用于 API 声明的 `.stub.php` 文件仍保留在原始文件包中，不生成可执行字节码。
+其他无法由 OPcache 编译的内嵌 PHP 文件会输出跳过日志，原始文件仍保留，但不进入
+可执行字节码表。运行时的 `require` 和 `require_once` 从内存交给 ZendVM 执行，
 无需读取磁盘上的 PHP 文件。构建字节码的 PHP CLI、OPcache 与目标 PHP 运行时需匹配。
+因此使用 `embedded-files` 构建时，宿主机必须提供相应的 `php`/`php.exe` 和
+OPcache 扩展；只有 `tpc` 无法生成字节码。
 运行二进制文件时无需 Composer 安装、磁盘 vendor 文件或 OPcache 扩展；Composer
 自动加载文件也已嵌入，仍按需加载类。构建时有 OPcache 的情况下，匿名类在首次执行
-对应 `new class` 表达式时从同一字节码表加载。未配置 `bundled-files` 且缺少
+对应 `new class` 表达式时从同一字节码表加载。未配置 `embedded-files` 且缺少
 OPcache 时，匿名类退回内嵌 PHP 代码方式。
 仅当目录名为 `vendor` 且目录下存在 `autoload.php` 时，才会使用字节码缓存；
-目录 mtime 及构建用的 PHP/OPcache 未变化时复用字节码。其他 `bundled-files`
+目录 mtime 及构建用的 PHP/OPcache 未变化时复用字节码。其他 `embedded-files`
 文件（包括缺少 `autoload.php` 的同名目录）每次构建都重新生成。
 修改目录下已有文件不会更新目录 mtime；这种情况可用 `--force` 重新生成
-vendor 字节码。
+vendor 字节码。不可执行的 vendor PHP 文件也会缓存跳过结果，`--force` 可重新尝试。
+编译器生成的匿名类字节码按生成的 PHP 内容及构建用的 PHP/OPcache 单独缓存；
+未变化的匿名类不会导致内嵌归档重新编译。
+Windows 上，TypePHP 通过 `rc.exe` 把归档链接为 PE 资源，由 phpx 字节码 helper
+读取；归档未变化时复用 `.res` 文件。
 通用的 `objects` 列表会把已有 `.o`/`.obj` 文件直接加入链接步骤。TypePHP
 不会重新编译这些文件；原生编译器、目标架构、编译参数和增量构建均由项目负责。
 使用目标通用参数的原生文件仍应放入 `sources`；仅当某个编译单元需要不同参数且

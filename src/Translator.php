@@ -1868,6 +1868,9 @@ CODE;
 
         $phpxDir = $this->getPhpxDir();
         $headerDirs = [$phpxDir . '/include', $phpxDir . '/src/misc'];
+        if (str_starts_with($cppFile, $phpxDir . '/thirdparty/opcache/')) {
+            $headerDirs[] = $phpxDir . '/thirdparty/opcache';
+        }
 
         foreach ($headerDirs as $dir) {
             if (!is_dir($dir)) {
@@ -2021,7 +2024,10 @@ CODE;
     public function isPhpxMiscFile(string $cppFile): bool
     {
         $miscDir = $this->getPhpxDir() . '/src/misc/';
-        return str_starts_with($cppFile, $miscDir);
+        $opcacheDir = $this->getPhpxDir() . '/thirdparty/opcache/';
+        return str_starts_with($cppFile, $miscDir)
+            || (str_starts_with($cppFile, $opcacheDir)
+                && preg_match('/\/opcode_unserialize_8[45]\.c$/', str_replace('\\', '/', $cppFile)) === 1);
     }
 
     /**
@@ -2212,7 +2218,9 @@ CODE;
             $sourceFiles[] = $this->getPhpxDir() . '/src/misc/typephp_main.cc';
             if ($this->bundledFiles !== [] || $this->embeddedOpcodeFiles !== []) {
                 $sourceFiles[] = $this->getPhpxDir() . '/src/misc/typephp_opcode_table.cc';
-                $versionHeader = $this->getPhpDir() . '/include/php/main/php_version.h';
+                $versionHeader = $this->isWindows()
+                    ? $this->getPhpDir() . '/SDK/include/main/php_version.h'
+                    : $this->getPhpDir() . '/include/php/main/php_version.h';
                 $versionText = is_file($versionHeader) ? file_get_contents($versionHeader) : '';
                 if (!preg_match('/#define PHP_VERSION_ID\s+(\d+)/', $versionText, $versionMatch)) {
                     throw new \RuntimeException("Cannot determine the target PHP version from {$versionHeader}");
@@ -3866,23 +3874,26 @@ CODE;
             $list = $this->getFilesFromDir($projectDir);
         }
 
-        // Raw files are bundled; PHP files not emitted by `sources` are also
+        // Raw files are embedded; PHP files not emitted by `sources` are also
         // compiled into OPcache blobs for ZendVM execution at runtime.
         if (array_key_exists('opcode-sources', $cfg)) {
-            $this->error('`opcode-sources` has been renamed to `bundled-files`');
+            $this->error('`opcode-sources` has been renamed to `embedded-files`');
         }
         if (array_key_exists('bundled-files', $cfg)) {
-            if (!is_array($cfg['bundled-files'])) {
-                $this->error('`bundled-files` must be an array');
+            $this->error('`bundled-files` has been renamed to `embedded-files`');
+        }
+        if (array_key_exists('embedded-files', $cfg)) {
+            if (!is_array($cfg['embedded-files'])) {
+                $this->error('`embedded-files` must be an array');
             }
-            foreach ($cfg['bundled-files'] as $entry) {
+            foreach ($cfg['embedded-files'] as $entry) {
                 [$src, $condition] = $this->parseProjectYamlSourceEntry($entry);
                 if ($condition !== null && !$this->evaluateProjectYamlCondition($condition)) {
                     continue;
                 }
                 $resolved = $this->getAbsolutePath($src, $projectDir);
                 if (!$resolved) {
-                    $this->error('Bundled file or directory does not exist: `' . $src . '`');
+                    $this->error('Embedded file or directory does not exist: `' . $src . '`');
                 }
                 if (is_file($resolved)) {
                     $this->bundledFiles[] = $resolved;
@@ -3901,11 +3912,14 @@ CODE;
             sort($this->bundledFiles, SORT_STRING);
             $this->bundledPhpFiles = array_values(array_filter(
                 $this->bundledFiles,
-                static fn(string $file): bool => FileScanner::isPhpFile($file),
+                // PHP extension stubs are API declarations for code generators.
+                // They remain in the raw archive but must never be executed.
+                static fn(string $file): bool => FileScanner::isPhpFile($file)
+                    && !str_ends_with($file, '.stub.php'),
             ));
             if ($this->bundledFiles !== []) {
                 $this->output(
-                    'bundled-files: found ' . count($this->bundledFiles)
+                    'embedded-files: found ' . count($this->bundledFiles)
                     . ' files (' . count($this->bundledPhpFiles) . ' PHP)',
                     'lightBlue',
                 );

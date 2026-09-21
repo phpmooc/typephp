@@ -28,12 +28,7 @@ function main(int $argc, array $argv): void
         );
     }
 
-    // The Zend PHP entrypoint loads the consumer project's Composer autoloader
-    // in bin/bootstrap.php. The AOT compiler starts here directly and therefore
-    // must load the dependencies packaged alongside tpc itself.
-    if (!defined('TYPEPHP_PHP_SCRIPT_ENTRY')) {
-        require_once dirname(__DIR__) . '/vendor/autoload.php';
-    }
+    require_once dirname(__DIR__) . '/vendor/autoload.php';
 
     $completionStatus = CompletionCommand::execute($argv);
     if ($completionStatus !== null) {

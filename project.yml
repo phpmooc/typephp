@@ -35,7 +35,7 @@ sources:
   - vendor/nikic/php-parser/lib/PhpParser/NodeVisitor.php
   - vendor/nikic/php-parser/lib/PhpParser/NodeVisitorAbstract.php
 
-bundled-files:
+embedded-files:
   - ./vendor
 
 ignore:

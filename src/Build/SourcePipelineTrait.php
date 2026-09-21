@@ -23,10 +23,10 @@ trait SourcePipelineTrait
 {
     use PreparedProjectCacheTrait;
 
-    /** @var list<string> PHP files selected by bundled-files. */
+    /** @var list<string> PHP files selected by embedded-files. */
     private array $bundledPhpFiles = [];
 
-    /** @var list<string> All regular files selected by bundled-files. */
+    /** @var list<string> All regular files selected by embedded-files. */
     private array $bundledFiles = [];
 
     /** @var list<string> Selected PHP files not translated to native code. */
@@ -45,6 +45,13 @@ trait SourcePipelineTrait
     private string $opcodeBuildProbeError = '';
     private string $opcodeBuildPhpVersion = '';
     private string $opcodeBuildSignature = '';
+
+    private ?string $embeddedArchiveFile = null;
+
+    private function getOpcodeBuildPhpCli(): string
+    {
+        return $this->getPhpDir() . ($this->isWindows() ? '/php.exe' : '/bin/php');
+    }
 
     /**
      * Prepare PHP inputs for the Composer php-nano source-composition build.
@@ -197,18 +204,23 @@ trait SourcePipelineTrait
         }
         $this->opcodeBuildChecked = true;
 
-        $php = $this->getPhpDir() . '/bin/php';
+        $php = $this->getOpcodeBuildPhpCli();
         if (!is_file($php) || !is_executable($php)) {
             $this->opcodeBuildProbeError = "Build PHP CLI is not executable: {$php}";
             return null;
         }
 
-        foreach ([[], ['-d', 'zend_extension=opcache']] as $extensionArgs) {
+        $extensionCandidates = [[], ['-d', 'zend_extension=opcache']];
+        if ($this->isWindows()) {
+            $extensionCandidates[] = ['-d', 'zend_extension=' . $this->getPhpDir() . '/ext/php_opcache.dll'];
+        }
+        foreach ($extensionCandidates as $extensionArgs) {
             $process = proc_open(
                 [
                     $php, '-n', ...$extensionArgs, '-d', 'opcache.enable_cli=1',
                     '-r', 'if (!extension_loaded("Zend OPcache") || !function_exists("opcache_compile_file")) exit(1); '
-                        . '$extension = ini_get("extension_dir") . DIRECTORY_SEPARATOR . "opcache." . PHP_SHLIB_SUFFIX; '
+                        . '$extension = PHP_OS_FAMILY === "Windows" ? dirname(PHP_BINARY) . "/ext/php_opcache.dll" '
+                        . ': ini_get("extension_dir") . DIRECTORY_SEPARATOR . "opcache." . PHP_SHLIB_SUFFIX; '
                         . 'echo json_encode(["php" => PHP_VERSION, "opcache" => phpversion("Zend OPcache"), '
                         . '"binary" => [PHP_BINARY, hash_file("sha256", PHP_BINARY)], '
                         . '"extension" => [$extension, is_file($extension) ? hash_file("sha256", $extension) : null], '
@@ -248,7 +260,7 @@ trait SourcePipelineTrait
         if ($extensionArgs !== null) {
             return $extensionArgs;
         }
-        $php = $this->getPhpDir() . '/bin/php';
+        $php = $this->getOpcodeBuildPhpCli();
         $detail = $this->opcodeBuildProbeError === '' ? '' : "\n" . $this->opcodeBuildProbeError;
         $this->error("Embedded opcode generation requires Zend OPcache for the build PHP CLI: {$php}{$detail}");
     }
@@ -317,12 +329,31 @@ trait SourcePipelineTrait
         }
         // OPcache uses a different file-cache path layout on Windows.
         if (DIRECTORY_SEPARATOR === '\\' && is_dir($cacheDir)) {
+            // The drive colon is omitted from OPcache's cache path (C:\foo
+            // becomes C\foo), after two system-specific cache directories.
+            $windowsCacheSuffix = str_replace('/', '\\', preg_replace('/^([A-Za-z]):/', '$1', $file)) . '.bin';
+            foreach (glob($cacheDir . '/*', GLOB_ONLYDIR) ?: [] as $systemDirectory) {
+                foreach (glob($systemDirectory . '/*', GLOB_ONLYDIR) ?: [] as $subDirectory) {
+                    $candidate = $subDirectory . DIRECTORY_SEPARATOR . $windowsCacheSuffix;
+                    if (is_file($candidate) && filesize($candidate) > 0) {
+                        $matches[] = $candidate;
+                    }
+                }
+            }
+            if (count($matches) > 1) {
+                throw new \RuntimeException("Ambiguous OPcache blob for {$file}");
+            }
+            if ($matches !== []) {
+                return $matches[0];
+            }
+            // Keep supporting other OPcache layouts without assuming the same
+            // number of system directories in every PHP build.
             $iterator = new \RecursiveIteratorIterator(
                 new \RecursiveDirectoryIterator($cacheDir, \FilesystemIterator::SKIP_DOTS),
             );
             foreach ($iterator as $cached) {
                 if ($cached->isFile() && $cached->getSize() > 0
-                    && str_ends_with($cached->getPathname(), $file . '.bin')) {
+                    && str_ends_with($cached->getPathname(), $windowsCacheSuffix)) {
                     if ($matches !== []) {
                         throw new \RuntimeException("Ambiguous OPcache blob for {$file}");
                     }
@@ -331,6 +362,11 @@ trait SourcePipelineTrait
             }
         }
         return $matches[0] ?? null;
+    }
+
+    private function getSkippedOpcodeMarker(string $cacheDir, string $file): string
+    {
+        return $cacheDir . '/skipped-' . hash('sha256', $file) . '.txt';
     }
 
     private function clearOpcodeCacheDirectory(string $directory): void
@@ -375,7 +411,7 @@ trait SourcePipelineTrait
                 throw new \RuntimeException('Embedded opcodes require a native PHP build host matching the target');
             }
             $this->output('Generating embedded opcodes for ' . count($files) . ' PHP files', 'lightBlue');
-            $php = $this->getPhpDir() . '/bin/php';
+            $php = $this->getOpcodeBuildPhpCli();
             $extensionArgs = $this->getOpcodeBuildExtensionArgs();
             $phpVersion = $this->opcodeBuildPhpVersion;
             $otherFiles = [];
@@ -464,8 +500,14 @@ PHP
             $pending = [];
             $vendorHits = 0;
             $anonymousHits = 0;
+            $vendorSkips = 0;
             foreach ($files as $file) {
                 $cacheDir = $fileCacheDirs[$file];
+                if (isset($vendorFiles[$file])
+                    && is_file($this->getSkippedOpcodeMarker($cacheDir, $file))) {
+                    ++$vendorSkips;
+                    continue;
+                }
                 if ((isset($vendorFiles[$file]) || isset($anonymousFiles[$file]))
                     && ($blob = $this->findOpcodeBlob($cacheDir, $file)) !== null) {
                     $blobs[$file] = $blob;
@@ -482,7 +524,8 @@ PHP
                 $vendorCount = array_sum(array_map('count', $vendorRoots));
                 $this->output(
                     'Vendor opcode cache: ' . $vendorHits . ' reused, '
-                    . ($vendorCount - $vendorHits) . ' to generate',
+                    . ($vendorCount - $vendorHits - $vendorSkips) . ' to generate'
+                    . ($vendorSkips === 0 ? '' : ', ' . $vendorSkips . ' skipped'),
                     'lightBlue',
                 );
             }
@@ -512,9 +555,26 @@ PHP
                 fclose($pipes[1]);
                 fclose($pipes[2]);
                 if (proc_close($process) !== 0) {
-                    throw new \RuntimeException("Cannot compile embedded opcode {$file}:\n{$stderr}");
+                    if (isset($anonymousFiles[$file])
+                        || !str_contains((string) $stderr, "OPcache could not compile: {$file}")) {
+                        throw new \RuntimeException("Cannot compile embedded opcode {$file}:\n{$stderr}");
+                    }
+                    // Embedded directories can contain PHP-looking declaration
+                    // files that are not scripts. Keep their raw bytes but do
+                    // not treat them as executable bytecode.
+                    $this->climate->warning('Skipping non-executable embedded PHP file: ' . $file);
+                    if (isset($vendorFiles[$file])) {
+                        $marker = $this->getSkippedOpcodeMarker($cacheDir, $file);
+                        if (file_put_contents($marker, $file . PHP_EOL) === false) {
+                            throw new \RuntimeException("Cannot cache skipped embedded PHP file: {$file}");
+                        }
+                    }
+                    $this->updateOpcodeProgress($progress, 'Opcodes', ++$completed, count($pending), $this->noProgress ? $file : null);
+                    continue;
                 }
-                if (trim($stdout) !== $phpVersion) {
+                // Compiled files may emit PHP deprecation notices on stdout.
+                // The driver prints its version before compiling the file.
+                if (strtok((string) $stdout, "\r\n") !== $phpVersion) {
                     throw new \RuntimeException("Build PHP version changed while compiling {$file}");
                 }
                 $blob = $this->findOpcodeBlob($cacheDir, $file);
@@ -580,13 +640,17 @@ PHP
             } else {
                 unlink($temporaryArchive);
             }
-            $assembly = $this->getBuildDir() . '/embedded-files-' . $this->targetName . '.S';
-            $quotedArchive = json_encode($archive, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
             $archiveHash = hash_file('sha256', $archive);
-            $asmCode = "# archive-sha256: {$archiveHash}\n.section .rodata\n#ifdef __APPLE__\n.globl _typephp_embedded_archive_start\n.p2align 4\n_typephp_embedded_archive_start:\n#else\n.globl typephp_embedded_archive_start\n.p2align 4\ntypephp_embedded_archive_start:\n#endif\n.incbin {$quotedArchive}\n";
-            $this->writeFile($assembly, $asmCode);
-            $this->generatedProjectSources[$assembly] = true;
-            $sources[] = $assembly;
+            if ($this->isWindows()) {
+                $this->embeddedArchiveFile = $archive;
+            } else {
+                $assembly = $this->getBuildDir() . '/embedded-files-' . $this->targetName . '.S';
+                $quotedArchive = json_encode($archive, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+                $asmCode = "# archive-sha256: {$archiveHash}\n.section .rodata\n#ifdef __APPLE__\n.globl _typephp_embedded_archive_start\n.p2align 4\n_typephp_embedded_archive_start:\n#else\n.globl typephp_embedded_archive_start\n.p2align 4\ntypephp_embedded_archive_start:\n#endif\n.incbin {$quotedArchive}\n";
+                $this->writeFile($assembly, $asmCode);
+                $this->generatedProjectSources[$assembly] = true;
+                $sources[] = $assembly;
+            }
             $this->output(
                 'Packed ' . count($rawIndex) . ' files and ' . count($opcodeIndex) . ' opcode blobs',
                 'green',
@@ -594,7 +658,10 @@ PHP
         }
 
         $code = '#include <typephp_opcode_table.h>' . PHP_EOL;
-        if ($this->bundledFiles !== [] || $files !== []) {
+        $hasArchive = $this->bundledFiles !== [] || $files !== [];
+        if ($hasArchive && $this->isWindows()) {
+            $code .= 'static const uint8_t *const typephp_embedded_archive_start = typephp_embedded_archive_data();' . PHP_EOL;
+        } elseif ($hasArchive) {
             $code .= 'extern "C" const uint8_t typephp_embedded_archive_start[];' . PHP_EOL;
         }
         $code .= 'static const typephp_opcode_entry typephp_opcodes[] = {' . PHP_EOL;
@@ -665,7 +732,7 @@ PHP
         // take the highest precedence)
         $this->applyCommandLineArguments();
         if ($this->bundledFiles !== [] && !$this->isBuildModeBin()) {
-            $this->error('`bundled-files` requires `mode: bin`');
+            $this->error('`embedded-files` requires `mode: bin`');
         }
         if ($this->bundledFiles !== []) {
             $this->getOpcodeBuildExtensionArgs();
