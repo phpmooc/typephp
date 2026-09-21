@@ -820,10 +820,9 @@ PHPX_HOME=/path/to/phpx php bin/tpc.php project.yml --job 2 --no-progress
 php run-tests.php -q -j8 --compiler ./tpc tests/compiler
 ```
 
-`project.yml` deliberately leaves Composer dependencies on disk. PHPT starts
-the compiler once per test, so embedding the complete Composer runtime would
-add its initialization cost to every case. Release packaging installs
-production dependencies and builds the standalone compiler separately:
+`project.yml` deliberately uses the source tree's Composer installation for
+development and PHPT. Release packaging installs production dependencies and
+builds the standalone compiler separately with `project-release.yml`:
 
 ```bash
 composer install --no-dev --classmap-authoritative

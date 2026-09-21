@@ -751,9 +751,8 @@ PHPX_HOME=/path/to/phpx php bin/tpc.php project.yml --job 2 --no-progress
 php run-tests.php -q -j8 --compiler ./tpc tests/compiler
 ```
 
-`project.yml` 有意从磁盘加载 Composer 依赖。PHPT 每个用例都会启动一次编译器，
-如果把完整 Composer 运行时嵌入测试编译器，每个用例都会重复承担初始化开销。
-发布打包阶段安装生产依赖，并单独构建可独立运行的编译器：
+开发和 PHPT 使用的 `project.yml` 直接使用源码树中的 Composer 安装。发布打包阶段
+安装生产依赖，并使用 `project-release.yml` 单独构建可独立运行的编译器：
 
 ```bash
 composer install --no-dev --classmap-authoritative

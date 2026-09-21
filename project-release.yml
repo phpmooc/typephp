@@ -1,7 +1,6 @@
 include: project.yml
 
-# Release binaries carry their Composer runtime as embedded opcodes and files.
-# Development and PHPT bootstrap builds use project.yml to avoid paying this
-# initialization cost for every compiler process.
+# Release binaries carry their production Composer runtime as embedded opcodes
+# and files. Development and PHPT bootstrap builds use project.yml directly.
 embedded-files:
   - ./vendor
