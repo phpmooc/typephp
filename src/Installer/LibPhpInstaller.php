@@ -182,7 +182,10 @@ final class LibPhpInstaller
             $this->run(['tar', '-xJf', $archive, '-C', $workDir]);
         }
 
-        $this->console->write('Configuring PHP with the current installation options plus --enable-embed=shared');
+        $this->console->write(
+            'Configuring PHP with compatible current installation options, '
+            . '--enable-embed=shared, and --without-pear'
+        );
         $this->run([$sourceDir . '/configure', ...$options], $sourceDir);
         // PHP is a large build; capping parallelism avoids exhausting memory on
         // hosts that expose many CPUs (especially containers and CI runners).

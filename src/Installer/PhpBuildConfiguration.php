@@ -118,6 +118,9 @@ final class PhpBuildConfiguration
         $replace = [
             '--prefix', '--with-config-file-path', '--with-config-file-scan-dir',
             '--enable-embed', '--enable-cli', '--disable-cli', '--with-libdir',
+            // PEAR is deprecated by PHP and PECL installation is being replaced
+            // by PIE. Do not inherit either form from the host PHP build.
+            '--with-pear', '--without-pear',
         ];
         $drop = [
             '--with-apxs', '--with-apxs2', '--enable-fpm', '--with-fpm-systemd',
@@ -143,6 +146,7 @@ final class PhpBuildConfiguration
             '--with-config-file-scan-dir=' . $prefix . '/lib/conf.d',
             '--enable-embed=shared',
             '--enable-cli',
+            '--without-pear',
             ...$result,
         ];
     }

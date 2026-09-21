@@ -68,12 +68,16 @@ final class FileScannerTest extends TestCase
      * Two links to one directory are one source file seen twice, and compiling
      * it twice would define its symbols twice.
      */
-    public function testAliasesOfOneFileAreScannedOnce(): void
+    public function testAliasesOfOneFileAreCompiledOnce(): void
     {
         symlink($this->root . '/outside', $this->root . '/project/link-a');
         symlink($this->root . '/outside', $this->root . '/project/link-b');
+        file_put_contents(
+            $this->root . '/project/project.yml',
+            "name: demo\nsources:\n  - .\n",
+        );
 
-        $files = (new FileScanner($this->root . '/project'))->scan();
+        $files = $this->scanProject($this->root . '/project/project.yml');
 
         $this->assertSame([
             $this->root . '/project/link-a/src/Linked.php',
@@ -100,6 +104,45 @@ final class FileScannerTest extends TestCase
                 $this->root . '/project/src/Own.php',
             ], $files, "excluding {$excluded} must not hide {$kept}");
         }
+    }
+
+    /**
+     * YAML ignore rules run outside FileScanner, so real-path deduplication must
+     * wait until the project-level filter has selected the surviving alias.
+     */
+    public function testYamlIgnoreOfOneAliasKeepsTheOther(): void
+    {
+        symlink($this->root . '/outside', $this->root . '/project/link-a');
+        symlink($this->root . '/outside', $this->root . '/project/link-b');
+
+        foreach (['link-a' => 'link-b', 'link-b' => 'link-a'] as $excluded => $kept) {
+            file_put_contents(
+                $this->root . '/project/project.yml',
+                "name: demo\nsources:\n  - .\nignore:\n  - {$excluded}\n",
+            );
+
+            $this->assertSame([
+                $this->root . '/project/' . $kept . '/src/Linked.php',
+                $this->root . '/project/src/Own.php',
+            ], $this->scanProject($this->root . '/project/project.yml'));
+        }
+    }
+
+    public function testLexicalPathNormalizationPreservesNetworkRoot(): void
+    {
+        $compiler = CompilerTest::create($this->root . '/project');
+        $normalize = (new \ReflectionClass($compiler))->getMethod('normalizeLexicalPath');
+        $separator = DIRECTORY_SEPARATOR;
+        $path = $separator . $separator . implode(
+            $separator,
+            ['server', 'share', 'project', '.', 'vendor', '..', '..', '..', 'package'],
+        );
+
+        $this->assertSame(
+            $separator . $separator . 'server' . $separator . 'share'
+                . $separator . 'package',
+            $normalize->invoke($compiler, $path),
+        );
     }
 
     /**
@@ -144,10 +187,9 @@ final class FileScannerTest extends TestCase
         $compiler   = CompilerTest::create(dirname($projectFile));
         $reflection = new \ReflectionClass($compiler);
 
-        $parse  = $reflection->getMethod('parseProjectYaml');
-        $filter = $reflection->getMethod('filterIgnoredFiles');
+        $parse = $reflection->getMethod('parseProjectYaml');
 
-        return array_values($filter->invoke($compiler, $parse->invoke($compiler, $projectFile)));
+        return array_values($parse->invoke($compiler, $projectFile));
     }
 
     private function removeDirectory(string $directory): void

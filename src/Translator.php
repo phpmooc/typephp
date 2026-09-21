@@ -88,7 +88,7 @@ class Translator extends Preprocessor
     use ResourceCompilationTrait;
     use ClassConstantValueTrait;
 
-    public const string VERSION = '0.9.0';
+    public const string VERSION = '0.9.1';
     public const string APP_NAME = 'TypePHP Compiler (AOT)';
 
     protected bool $hasExplicitOutput = false;
@@ -3916,20 +3916,31 @@ CODE;
             $path = str_replace('\\', '/', $path);
         }
 
+        // Preserve the double leading separator of Windows UNC paths. Keeping
+        // it on POSIX as well makes the normalization rule deterministic and
+        // retains the implementation-defined // network-root form.
+        $networkRoot = str_starts_with($path, '//');
         $absolute = str_starts_with($path, '/');
+        // The server and share names form the root of a UNC path. `..` cannot
+        // cross that boundary into another share on the same server.
+        $rootDepth = $networkRoot ? 2 : 0;
         $segments = [];
         foreach (explode('/', $path) as $segment) {
             if ($segment === '' || $segment === '.') {
                 continue;
             }
-            if ($segment === '..' && $segments !== [] && end($segments) !== '..') {
-                array_pop($segments);
+            if ($segment === '..') {
+                if (count($segments) > $rootDepth && end($segments) !== '..') {
+                    array_pop($segments);
+                } elseif (!$absolute) {
+                    $segments[] = $segment;
+                }
                 continue;
             }
             $segments[] = $segment;
         }
 
-        $normalized = ($absolute ? '/' : '') . implode('/', $segments);
+        $normalized = ($networkRoot ? '//' : ($absolute ? '/' : '')) . implode('/', $segments);
         if ($prefix !== '') {
             $normalized = $prefix . $normalized;
         }

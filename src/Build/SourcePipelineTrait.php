@@ -947,15 +947,22 @@ PHP
 
     protected function filterIgnoredFiles(array $files): array
     {
-        if (empty($this->ignorePaths)) {
-            return $files;
-        }
-
         $filteredFiles = [];
+        $seenRealPaths = [];
         foreach ($files as $file) {
-            if (!$this->shouldIgnoreFile($file)) {
-                $filteredFiles[] = $file;
+            if ($this->shouldIgnoreFile($file)) {
+                continue;
             }
+
+            // Ignore rules describe the path used to reach a source. Resolve
+            // identity only after those rules have selected the surviving
+            // aliases, then compile each physical file once.
+            $identity = realpath($file) ?: $file;
+            if (isset($seenRealPaths[$identity])) {
+                continue;
+            }
+            $seenRealPaths[$identity] = true;
+            $filteredFiles[] = $file;
         }
 
         return $filteredFiles;

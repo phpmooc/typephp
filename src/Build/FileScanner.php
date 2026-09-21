@@ -104,7 +104,11 @@ class FileScanner
         // keep both generated code and cache classification deterministic.
         sort($files, SORT_STRING);
 
-        return $this->deduplicateByRealPath($files);
+        // Keep aliases until the project-level ignore rules have run. If two
+        // links reach the same file and only one is ignored, removing aliases
+        // here would also remove the allowed path. The source pipeline performs
+        // real-path deduplication after filtering.
+        return $files;
     }
 
     /**
@@ -164,34 +168,6 @@ class FileScanner
             }
             $ancestor = $parent;
         }
-    }
-
-    /**
-     * One file reachable through several links is still one source file, and
-     * compiling it twice would define its symbols twice.
-     *
-     * Exclusions have already run, so a path the project excluded can never be
-     * the alias that survives here. The list is sorted, so which alias survives
-     * does not depend on directory-entry order.
-     *
-     * @param list<string> $files
-     * @return list<string>
-     */
-    private function deduplicateByRealPath(array $files): array
-    {
-        $unique = [];
-        $seen   = [];
-
-        foreach ($files as $file) {
-            $identity = realpath($file) ?: $file;
-            if (isset($seen[$identity])) {
-                continue;
-            }
-            $seen[$identity] = true;
-            $unique[]        = $file;
-        }
-
-        return $unique;
     }
 
     private function isExcluded(string $filePath): bool

@@ -21,7 +21,7 @@ vendor/bin/tpc.php project.yml
 3. 安装目录，默认为 `~/.typephp`；
 4. 是否通过检测到的 `apt-get`、`dnf` 或 `yum` 安装缺失的开发包。
 
-安装器读取当前 `php-config --configure-options`，保留当前 PHP 的扩展配置，替换安装路径并加入 `--enable-embed=shared`。PHP 源码只从 PHP.net 下载，并使用官方发布信息中的 SHA-256 校验。
+安装器读取当前 `php-config --configure-options`，保留当前 PHP 支持的扩展配置，替换安装路径并加入 `--enable-embed=shared`。由于 PEAR 已废弃，构建始终使用 `--without-pear`。PHP 源码只从 PHP.net 下载，并使用官方发布信息中的 SHA-256 校验。
 
 编译完成后主要文件如下：
 

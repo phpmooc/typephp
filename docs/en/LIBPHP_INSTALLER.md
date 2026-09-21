@@ -21,7 +21,7 @@ When `libphp.so` is missing, the installer asks in sequence:
 3. the install directory, defaulting to `~/.typephp`;
 4. whether to install missing development packages via the detected `apt-get`, `dnf`, or `yum`.
 
-The installer reads the current `php-config --configure-options`, keeps the current PHP's extension configuration, replaces the install path, and adds `--enable-embed=shared`. PHP source is downloaded only from PHP.net, and verified using the SHA-256 from the official release information.
+The installer reads the current `php-config --configure-options`, keeps the current PHP's supported extension configuration, replaces the install path, and adds `--enable-embed=shared`. It always uses `--without-pear` because PEAR is deprecated. PHP source is downloaded only from PHP.net, and verified using the SHA-256 from the official release information.
 
 After compilation, the main files are as follows:
 

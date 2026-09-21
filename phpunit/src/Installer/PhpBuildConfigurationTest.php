@@ -121,6 +121,23 @@ final class PhpBuildConfigurationTest extends TestCase
         self::assertContains('--enable-pcntl', $options);
     }
 
+    public function testDeriveAlwaysDisablesDeprecatedPearInstallation(): void
+    {
+        $options = PhpBuildConfiguration::derive(
+            "'--with-pear=/usr/share/php' '--enable-mbstring'",
+            '/home/test/.typephp'
+        );
+
+        self::assertSame(
+            ['--without-pear'],
+            array_values(array_filter(
+                $options,
+                static fn(string $option): bool => str_contains($option, 'pear')
+            ))
+        );
+        self::assertContains('--enable-mbstring', $options);
+    }
+
     public function testParseShellWordsRejectsIncompleteInput(): void
     {
         $this->expectException(\InvalidArgumentException::class);
