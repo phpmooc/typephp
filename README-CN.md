@@ -352,7 +352,9 @@ embedded-files:
 
 路径以最外层项目 YAML 文件所在目录为基准。source 可以是文件或目录；条件 source 支持
 `PHP_VERSION`、`PHP_VERSION_ID` 和 `PHP_OS_FAMILY`。命令行参数优先于 YAML
-中的同名配置。原生链接依赖应写入 `link-libs`；`ext-deps` 会生成
+中的同名配置。扫描源码目录时会进入符号链接指向的目录，因此通过 Composer path
+仓库安装的依赖（以符号链接方式安装）会像其他源码一样被编译；如需排除，请在
+`ignore` 中按访问该目录所用的路径书写。原生链接依赖应写入 `link-libs`；`ext-deps` 会生成
 `ZEND_MOD_REQUIRED`，缺少所需 PHP 扩展时由 Zend 拒绝加载模块。
 `version` 用于设置 Zend 模块版本。`info` 映射可配置任意标签和值，并显示在模块
 独立的 `phpinfo()` 区块中。
