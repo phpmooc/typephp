@@ -34,6 +34,30 @@ final class NativeObjectStackPromotionCodegenTest extends TestCase
             $header,
         );
         self::assertStringContainsString(
+            '~php_nativestackpromotionfixture() noexcept;',
+            $header,
+        );
+        self::assertStringNotContainsString(
+            'virtual ~php_nativestackpromotionfixture()',
+            $header,
+        );
+        self::assertStringContainsString(
+            '~php_nativestackfinalizerfixture() noexcept(false);',
+            $header,
+        );
+        self::assertStringNotContainsString(
+            'virtual ~php_nativestackfinalizerfixture()',
+            $header,
+        );
+        self::assertStringContainsString(
+            'virtual ~php_nativestackpromotionbase() noexcept;',
+            $header,
+        );
+        self::assertStringContainsString(
+            'virtual ~php_nativestackpromotionchild() noexcept override;',
+            $header,
+        );
+        self::assertStringContainsString(
             'virtual php::Int __typephp_virtual_php_nativestackpromotionbase__readfrombase() override;',
             $header,
         );
