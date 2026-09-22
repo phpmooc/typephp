@@ -60,13 +60,12 @@ final class EmbeddedArchiveBuilder
                 throw new \RuntimeException("Cannot remove unchanged embedded archive: {$temporaryPath}");
             }
         } else {
-            if (is_file($archivePath) && !unlink($archivePath)) {
-                @unlink($temporaryPath);
-                throw new \RuntimeException("Cannot replace embedded file archive: {$archivePath}");
-            }
-            if (!rename($temporaryPath, $archivePath)) {
-                @unlink($temporaryPath);
-                throw new \RuntimeException("Cannot install embedded file archive: {$archivePath}");
+            try {
+                AtomicFile::replace($temporaryPath, $archivePath);
+            } finally {
+                if (is_file($temporaryPath)) {
+                    @unlink($temporaryPath);
+                }
             }
         }
 
