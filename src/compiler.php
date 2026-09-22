@@ -3,6 +3,7 @@ use TypePhp\Translator;
 use TypePhp\Build\WasiToolchain;
 use TypePhp\Build\WasiProjectConfig;
 use TypePhp\Build\PhpxLocator;
+use TypePhp\Build\ExecutableLocator;
 use TypePhp\Build\NativeSourceProjectBuilder;
 use TypePhp\Build\NativeSourceProjectConfig;
 use TypePhp\Build\ProjectBuildRunner;
@@ -15,18 +16,13 @@ function main(int $argc, array $argv): void
     // memory. The default CLI limit (commonly 128M) is too small for larger builds.
     ini_set('memory_limit', '-1');
 
-    if (!defined('TYPEPHP_ROOT_PATH')) {
-        define('TYPEPHP_ROOT_PATH', getenv("TYPEPHP_HOME") ?: getcwd());
-    }
-    if (!defined('TYPEPHP_DEBUG')) {
-        define('TYPEPHP_DEBUG', true);
-    }
+    $compilerExecutable = ExecutableLocator::resolve($argv[0]) ?? $argv[0];
     if (!defined('TYPEPHP_COMPILER_EXECUTABLE')) {
-        $compilerExecutable = realpath($argv[0]);
-        define(
-            'TYPEPHP_COMPILER_EXECUTABLE',
-            $compilerExecutable !== false ? $compilerExecutable : $argv[0],
-        );
+        define('TYPEPHP_COMPILER_EXECUTABLE', $compilerExecutable);
+    }
+    if (!defined('TYPEPHP_ROOT_PATH')) {
+        $compilerRoot = realpath(dirname($compilerExecutable));
+        define('TYPEPHP_ROOT_PATH', $compilerRoot !== false ? $compilerRoot : dirname($compilerExecutable));
     }
 
     // The PHP entrypoint already loaded Composer's project autoloader in
@@ -63,7 +59,7 @@ function main(int $argc, array $argv): void
     }
 
     if (getenv('TYPEPHP_WASM_INTERNAL_COMPILE') !== '1' && shouldCompileWasm($argv)) {
-        compileWasmProgram($argv);
+        compileWasmProgram($argv, $compilerExecutable);
         return;
     }
 
@@ -159,7 +155,7 @@ function compileNativeSourceProject(array $argv): void
  * The lower-level build scripts are implementation details and are not part of
  * the user-facing workflow.
  */
-function compileWasmProgram(array $argv): void
+function compileWasmProgram(array $argv, string $compilerExecutable): void
 {
     $input = null;
     $buildDir = null;
@@ -282,8 +278,7 @@ function compileWasmProgram(array $argv): void
     $environment['TYPEPHP_WASM_PACKAGE'] = $project->package;
     $environment['TYPEPHP_WASM_WORLD'] = $project->world;
     $environment['TYPEPHP_WASM_NANO'] = $nano ? '1' : '0';
-    $compilerExecutable = realpath($argv[0]);
-    if ($compilerExecutable === false || !is_executable($compilerExecutable)) {
+    if (!is_file($compilerExecutable) || !is_executable($compilerExecutable)) {
         fwrite(STDERR, "Unable to resolve the current TypePHP compiler executable: {$argv[0]}\n");
         exit(1);
     }

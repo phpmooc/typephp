@@ -762,10 +762,8 @@ class CompilerBase implements PropertyAccessContext
         $message = 'Error: Unsupported ' . $this->getLang() . ' Syntax,';
         $message .= ' Line: ' . $this->getLine($node) . ', Type: ' . $this->getType($node) . PHP_EOL;
         if ($this->mode === 'cli') {
-            if (defined('TYPEPHP_DEBUG') && TYPEPHP_DEBUG) {
-                var_dump($node);
-                debug_print_backtrace();
-            }
+            var_dump($node);
+            debug_print_backtrace();
         } else {
             header('Content-Type: application/json');
             echo json_encode($node, JSON_PRETTY_PRINT);

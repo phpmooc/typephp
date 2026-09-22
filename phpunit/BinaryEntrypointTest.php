@@ -19,7 +19,6 @@ final class BinaryEntrypointTest extends TestCase
         self::assertFalse(defined('ROOT_PATH'));
         self::assertFalse(defined('DEBUG'));
         self::assertSame(realpath(__DIR__ . '/..'), TYPEPHP_ROOT_PATH);
-        self::assertTrue(TYPEPHP_DEBUG);
     }
 
     public function testStubGeneratorDoesNotPolluteTheGlobalSymbolTable(): void
