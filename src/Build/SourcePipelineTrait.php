@@ -301,98 +301,27 @@ trait SourcePipelineTrait
         }
     }
 
-    /** Only files under a vendor directory with autoload.php use the mtime cache. */
-    private function vendorRootForOpcodeFile(string $file): ?string
-    {
-        for ($directory = dirname($file); $directory !== dirname($directory); $directory = dirname($directory)) {
-            if (basename($directory) === 'vendor' && is_file($directory . '/autoload.php')) {
-                return $directory;
-            }
-        }
-        return null;
-    }
-
-    private function findOpcodeBlob(string $cacheDir, string $file): ?string
-    {
-        $matches = [];
-        foreach (glob($cacheDir . '/*', GLOB_ONLYDIR) ?: [] as $systemDirectory) {
-            $candidate = $systemDirectory . $file . '.bin';
-            if (is_file($candidate) && filesize($candidate) > 0) {
-                $matches[] = $candidate;
-            }
-        }
-        if (count($matches) > 1) {
-            throw new \RuntimeException("Ambiguous OPcache blob for {$file}");
-        }
-        if ($matches !== []) {
-            return $matches[0];
-        }
-        // OPcache uses a different file-cache path layout on Windows.
-        if (DIRECTORY_SEPARATOR === '\\' && is_dir($cacheDir)) {
-            // The drive colon is omitted from OPcache's cache path (C:\foo
-            // becomes C\foo), after two system-specific cache directories.
-            $windowsCacheSuffix = str_replace('/', '\\', preg_replace('/^([A-Za-z]):/', '$1', $file)) . '.bin';
-            foreach (glob($cacheDir . '/*', GLOB_ONLYDIR) ?: [] as $systemDirectory) {
-                foreach (glob($systemDirectory . '/*', GLOB_ONLYDIR) ?: [] as $subDirectory) {
-                    $candidate = $subDirectory . DIRECTORY_SEPARATOR . $windowsCacheSuffix;
-                    if (is_file($candidate) && filesize($candidate) > 0) {
-                        $matches[] = $candidate;
-                    }
-                }
-            }
-            if (count($matches) > 1) {
-                throw new \RuntimeException("Ambiguous OPcache blob for {$file}");
-            }
-            if ($matches !== []) {
-                return $matches[0];
-            }
-            // Keep supporting other OPcache layouts without assuming the same
-            // number of system directories in every PHP build.
-            $iterator = new \RecursiveIteratorIterator(
-                new \RecursiveDirectoryIterator($cacheDir, \FilesystemIterator::SKIP_DOTS),
-            );
-            foreach ($iterator as $cached) {
-                if ($cached->isFile() && $cached->getSize() > 0
-                    && str_ends_with($cached->getPathname(), $windowsCacheSuffix)) {
-                    if ($matches !== []) {
-                        throw new \RuntimeException("Ambiguous OPcache blob for {$file}");
-                    }
-                    $matches[] = $cached->getPathname();
-                }
-            }
-        }
-        return $matches[0] ?? null;
-    }
-
-    private function getSkippedOpcodeMarker(string $cacheDir, string $file): string
-    {
-        return $cacheDir . '/skipped-' . hash('sha256', $file) . '.txt';
-    }
-
-    private function clearOpcodeCacheDirectory(string $directory): void
-    {
-        if (!is_dir($directory)) {
-            return;
-        }
-        $iterator = new \RecursiveIteratorIterator(
-            new \RecursiveDirectoryIterator($directory, \FilesystemIterator::SKIP_DOTS),
-            \RecursiveIteratorIterator::CHILD_FIRST,
-        );
-        foreach ($iterator as $entry) {
-            $path = $entry->getPathname();
-            if ($entry->isDir() ? !rmdir($path) : !unlink($path)) {
-                throw new \RuntimeException("Cannot clear opcode build directory: {$path}");
-            }
-        }
-        if (!rmdir($directory)) {
-            throw new \RuntimeException("Cannot clear opcode build directory: {$directory}");
-        }
-    }
-
     /** Embed OPcache's file-cache bytes for scripts left to ZendVM. */
     private function genEmbeddedOpcodeTable(): array
     {
         $output = $this->getBuildDir() . '/embedded-opcodes-' . $this->targetName . '.cc';
+        $this->migrateEmbeddedOpcodeCaches();
+        $files = array_values(array_unique($this->embeddedOpcodeFiles));
+        sort($files, SORT_STRING);
+
+        $blobs = [];
+        $phpVersion = PHP_VERSION;
+        if ($files !== []) {
+            ['blobs' => $blobs, 'phpVersion' => $phpVersion] = $this->generateEmbeddedOpcodeBlobs($files);
+        }
+
+        $sources = $this->emitEmbeddedArchiveSources($output, $files, $blobs, $phpVersion);
+        $this->removeLegacyAnonymousArtifacts();
+        return $sources;
+    }
+
+    private function migrateEmbeddedOpcodeCaches(): void
+    {
         foreach (glob($this->getBuildDir() . '/opcache-*') ?: [] as $legacyCache) {
             if (is_dir($legacyCache)) {
                 $this->moveLegacyBuildCache(
@@ -401,195 +330,85 @@ trait SourcePipelineTrait
                 );
             }
         }
-        $files = array_values(array_unique($this->embeddedOpcodeFiles));
-        sort($files, SORT_STRING);
-        $blobs = [];
-        $phpVersion = PHP_VERSION;
-
-        if ($files !== []) {
-            if ($this->isIosTarget() || $this->isAndroidTarget() || $this->isWasiTarget()) {
-                throw new \RuntimeException('Embedded opcodes require a native PHP build host matching the target');
-            }
-            $this->output('Generating embedded opcodes for ' . count($files) . ' PHP files', 'lightBlue');
-            $php = $this->getOpcodeBuildPhpCli();
-            $extensionArgs = $this->getOpcodeBuildExtensionArgs();
-            $phpVersion = $this->opcodeBuildPhpVersion;
-            $otherFiles = [];
-            $vendorRoots = [];
-            $vendorFiles = [];
-            $anonymousFiles = [];
-            $fileCacheDirs = [];
-            foreach ($files as $file) {
-                if (isset($this->anonymousOpcodeKeys[$file])) {
-                    // These files are emitted by this compiler, so their exact
-                    // contents provide a safe cache key independent of any
-                    // user-supplied directory timestamp.
-                    $key = hash('sha256', implode("\n", [
-                        'anonymous-opcodes-v1', $file,
-                        hash_file('sha256', $file), $this->opcodeBuildSignature,
-                    ]));
-                    $cacheDir = $this->getBuildDir() . '/cache/opcache/anonymous-' . substr($key, 0, 20);
-                    if ($this->climate->arguments->defined('force')) {
-                        $this->clearOpcodeCacheDirectory($cacheDir);
-                    }
-                    $fileCacheDirs[$file] = $cacheDir;
-                    $anonymousFiles[$file] = true;
-                    continue;
-                }
-                $vendorRoot = $this->vendorRootForOpcodeFile($file);
-                if ($vendorRoot === null) {
-                    $otherFiles[] = $file;
-                    continue;
-                }
-                $vendorRoots[$vendorRoot][] = $file;
-                $vendorFiles[$file] = true;
-            }
-            foreach ($vendorRoots as $vendorRoot => $filesInVendor) {
-                clearstatcache(true, $vendorRoot);
-                $mtime = filemtime($vendorRoot);
-                if ($mtime === false) {
-                    throw new \RuntimeException("Cannot read vendor directory mtime: {$vendorRoot}");
-                }
-                $key = hash('sha256', implode("\n", [
-                    'vendor-directory-mtime-opcodes-v2', $vendorRoot,
-                    (string) $mtime, $this->opcodeBuildSignature,
-                ]));
-                $cacheDir = $this->getBuildDir() . '/cache/opcache/vendor-' . substr($key, 0, 20);
-                if ($this->climate->arguments->defined('force')) {
-                    $this->clearOpcodeCacheDirectory($cacheDir);
-                }
-                foreach ($filesInVendor as $file) {
-                    $fileCacheDirs[$file] = $cacheDir;
-                }
-            }
-            if ($otherFiles !== []) {
-                // Recreate this staging directory on every build so OPcache
-                // cannot reuse bytecode for non-vendor or anonymous sources.
-                $cacheDir = $this->getBuildDir() . '/cache/opcache/nonvendor-'
-                    . substr(hash('sha256', $this->targetName), 0, 20);
-                $this->clearOpcodeCacheDirectory($cacheDir);
-                foreach ($otherFiles as $file) {
-                    $fileCacheDirs[$file] = $cacheDir;
-                }
-            }
-            $driver = $this->getBuildDir() . '/cache/opcache/compile-embedded-opcodes.php';
-            $this->moveLegacyBuildCache(
-                $this->getBuildDir() . '/compile-embedded-opcodes.php',
-                $driver,
-            );
-            $this->writeFile($driver, <<<'PHP'
-<?php
-echo PHP_VERSION, "\n";
-foreach (array_slice($argv, 1) as $path) {
-    if (!opcache_compile_file($path)) {
-        fwrite(STDERR, "OPcache could not compile: {$path}\n");
-        exit(1);
+        $this->moveLegacyBuildCache(
+            $this->getBuildDir() . '/compile-embedded-opcodes.php',
+            $this->getBuildDir() . '/cache/opcache/compile-embedded-opcodes.php',
+        );
     }
-}
-PHP
-            );
-            $command = [
-                $php, '-n', ...$extensionArgs,
-                '-d', 'opcache.enable_cli=1',
-                '-d', 'opcache.file_cache_only=1',
-                '-d', 'opcache.file_update_protection=0',
-            ];
-            // OPcache installs declarations in the compiling CLI process.
-            // Isolate files so unrelated scripts with the same global
-            // function names do not conflict while creating their bytecode.
-            $pending = [];
-            $vendorHits = 0;
-            $anonymousHits = 0;
-            $vendorSkips = 0;
-            foreach ($files as $file) {
-                $cacheDir = $fileCacheDirs[$file];
-                if (isset($vendorFiles[$file])
-                    && is_file($this->getSkippedOpcodeMarker($cacheDir, $file))) {
-                    ++$vendorSkips;
-                    continue;
-                }
-                if ((isset($vendorFiles[$file]) || isset($anonymousFiles[$file]))
-                    && ($blob = $this->findOpcodeBlob($cacheDir, $file)) !== null) {
-                    $blobs[$file] = $blob;
-                    if (isset($anonymousFiles[$file])) {
-                        ++$anonymousHits;
-                    } else {
-                        ++$vendorHits;
-                    }
-                } else {
-                    $pending[] = $file;
-                }
-            }
-            if ($vendorRoots !== []) {
-                $vendorCount = array_sum(array_map('count', $vendorRoots));
-                $this->output(
-                    'Vendor opcode cache: ' . $vendorHits . ' reused, '
-                    . ($vendorCount - $vendorHits - $vendorSkips) . ' to generate'
-                    . ($vendorSkips === 0 ? '' : ', ' . $vendorSkips . ' skipped'),
-                    'lightBlue',
-                );
-            }
-            if ($anonymousFiles !== []) {
-                $this->output(
-                    'Anonymous opcode cache: ' . $anonymousHits . ' reused, '
-                    . (count($anonymousFiles) - $anonymousHits) . ' to generate',
-                    'lightBlue',
-                );
-            }
-            $progress = $this->startOpcodeProgress('Opcodes', count($pending));
-            $completed = 0;
-            foreach ($pending as $file) {
-                $cacheDir = $fileCacheDirs[$file];
-                if (!is_dir($cacheDir) && !mkdir($cacheDir, 0777, true) && !is_dir($cacheDir)) {
-                    throw new \RuntimeException("Cannot create OPcache build directory: {$cacheDir}");
-                }
-                $process = proc_open([...$command, '-d', 'opcache.file_cache=' . $cacheDir, $driver, $file], [
-                    0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w'],
-                ], $pipes);
-                if (!is_resource($process)) {
-                    throw new \RuntimeException('Cannot start the PHP OPcache build process');
-                }
-                fclose($pipes[0]);
-                $stdout = stream_get_contents($pipes[1]);
-                $stderr = stream_get_contents($pipes[2]);
-                fclose($pipes[1]);
-                fclose($pipes[2]);
-                if (proc_close($process) !== 0) {
-                    if (isset($anonymousFiles[$file])
-                        || !str_contains((string) $stderr, "OPcache could not compile: {$file}")) {
-                        throw new \RuntimeException("Cannot compile embedded opcode {$file}:\n{$stderr}");
-                    }
-                    // Embedded directories can contain PHP-looking declaration
-                    // files that are not scripts. Keep their raw bytes but do
-                    // not treat them as executable bytecode.
-                    $this->climate->warning('Skipping non-executable embedded PHP file: ' . $file);
-                    if (isset($vendorFiles[$file])) {
-                        $marker = $this->getSkippedOpcodeMarker($cacheDir, $file);
-                        if (file_put_contents($marker, $file . PHP_EOL) === false) {
-                            throw new \RuntimeException("Cannot cache skipped embedded PHP file: {$file}");
-                        }
-                    }
-                    $this->updateOpcodeProgress($progress, 'Opcodes', ++$completed, count($pending), $this->noProgress ? $file : null);
-                    continue;
-                }
-                // Compiled files may emit PHP deprecation notices on stdout.
-                // The driver prints its version before compiling the file.
-                if (strtok((string) $stdout, "\r\n") !== $phpVersion) {
-                    throw new \RuntimeException("Build PHP version changed while compiling {$file}");
-                }
-                $blob = $this->findOpcodeBlob($cacheDir, $file);
-                if ($blob === null) {
-                    throw new \RuntimeException("Missing OPcache blob for {$file}");
-                }
-                $blobs[$file] = $blob;
-                $this->updateOpcodeProgress($progress, 'Opcodes', ++$completed, count($pending), $this->noProgress ? $file : null);
-            }
-            if ($progress !== null) {
-                echo PHP_EOL;
-            }
-            uksort($blobs, static fn(string $left, string $right): int => strcmp($left, $right));
-        }
 
+    /** @param list<string> $files @return array{blobs: array<string, string>, phpVersion: string} */
+    private function generateEmbeddedOpcodeBlobs(array $files): array
+    {
+        if ($this->isIosTarget() || $this->isAndroidTarget() || $this->isWasiTarget()) {
+            throw new \RuntimeException('Embedded opcodes require a native PHP build host matching the target');
+        }
+        $this->output('Generating embedded opcodes for ' . count($files) . ' PHP files', 'lightBlue');
+
+        $generator = new EmbeddedOpcodeGenerator(
+            $this->getBuildDir(),
+            $this->targetName,
+            $this->getOpcodeBuildPhpCli(),
+            $this->getOpcodeBuildExtensionArgs(),
+            $this->opcodeBuildPhpVersion,
+            $this->opcodeBuildSignature,
+            $this->climate->arguments->defined('force'),
+        );
+        $batch = $generator->prepare($files, $this->anonymousOpcodeKeys);
+        $this->reportEmbeddedOpcodeCache($batch);
+
+        $progress = $this->startOpcodeProgress('Opcodes', $batch->pendingCount());
+        $blobs = $generator->compile(
+            $batch,
+            fn(string $file) => $this->climate->warning(
+                'Skipping non-executable embedded PHP file: ' . $file,
+            ),
+            fn(int $completed, int $total, string $file) => $this->updateOpcodeProgress(
+                $progress,
+                'Opcodes',
+                $completed,
+                $total,
+                $this->noProgress ? $file : null,
+            ),
+        );
+        if ($progress !== null) {
+            echo PHP_EOL;
+        }
+        return ['blobs' => $blobs, 'phpVersion' => $this->opcodeBuildPhpVersion];
+    }
+
+    private function reportEmbeddedOpcodeCache(EmbeddedOpcodeBatch $batch): void
+    {
+        if ($batch->vendorCount() !== 0) {
+            $vendorHits = $batch->vendorHits();
+            $vendorSkips = $batch->skippedVendorCount();
+            $this->output(
+                'Vendor opcode cache: ' . $vendorHits . ' reused, '
+                . ($batch->vendorCount() - $vendorHits - $vendorSkips) . ' to generate'
+                . ($vendorSkips === 0 ? '' : ', ' . $vendorSkips . ' skipped'),
+                'lightBlue',
+            );
+        }
+        if ($batch->anonymousCount() !== 0) {
+            $anonymousHits = $batch->anonymousHits();
+            $this->output(
+                'Anonymous opcode cache: ' . $anonymousHits . ' reused, '
+                . ($batch->anonymousCount() - $anonymousHits) . ' to generate',
+                'lightBlue',
+            );
+        }
+    }
+
+    /**
+     * @param list<string> $opcodeFiles
+     * @param array<string, string> $blobs
+     * @return list<string>
+     */
+    private function emitEmbeddedArchiveSources(
+        string $output,
+        array $opcodeFiles,
+        array $blobs,
+        string $phpVersion,
+    ): array {
         $archive = $this->getBuildDir() . '/cache/embedded/embedded-files-' . $this->targetName . '.bin';
         $this->moveLegacyBuildCache(
             $this->getBuildDir() . '/embedded-files-' . $this->targetName . '.bin',
@@ -597,7 +416,7 @@ PHP
         );
         $sources = [$output];
         $embeddedArchive = EmbeddedArchive::empty($archive);
-        if ($this->embeddedFiles !== [] || $files !== []) {
+        if ($this->embeddedFiles !== [] || $opcodeFiles !== []) {
             $embeddedArchive = (new EmbeddedArchiveBuilder())->build(
                 $archive,
                 $this->embeddedFiles,
@@ -629,13 +448,17 @@ PHP
             (new EmbeddedTableRenderer())->render($embeddedArchive, $phpVersion, $this->isWindows()),
         );
         $this->generatedProjectSources[$output] = true;
+        return $sources;
+    }
+
+    private function removeLegacyAnonymousArtifacts(): void
+    {
         foreach (glob($this->getBuildDir() . '/anonymous-*.json') ?: [] as $legacyManifest) {
             unlink($legacyManifest);
         }
         foreach (glob($this->getBuildDir() . '/anonymous-' . $this->targetName . '-*.php') ?: [] as $legacySource) {
             unlink($legacySource);
         }
-        return $sources;
     }
 
     public function getFiles(string $path): array
