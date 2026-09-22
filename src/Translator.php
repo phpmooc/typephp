@@ -17,6 +17,7 @@ use TypePhp\Analysis\NativeObjectStackPromotionAnalyzer;
 use TypePhp\Analysis\SsaBuilder;
 use TypePhp\Backend\CompilerFactory;
 use TypePhp\Build\CompileOptions;
+use TypePhp\Build\CompilerRuntime;
 use TypePhp\Build\FileScanner;
 use TypePhp\Build\IncrementalCompilationTrait;
 use TypePhp\Build\NativeCommandOptionsTrait;
@@ -153,9 +154,9 @@ class Translator extends Preprocessor
         return $func->method && str_ends_with($func->name, self::NAMESPACE_SEPARATOR . '__construct');
     }
 
-    public function __construct(string $rootPath)
+    public function __construct(string $rootPath, ?CompilerRuntime $compilerRuntime = null)
     {
-        parent::__construct($rootPath);
+        parent::__construct($rootPath, $compilerRuntime);
         $this->climate->arguments->add(Constants::COMPILER_OPTIONS);
         $this->preprocessArgvAdvanced();
         $this->climate->arguments->parse();
@@ -199,10 +200,13 @@ class Translator extends Preprocessor
         self::$instance = $this;
     }
 
-    public static function getInstance(): Translator
+    public static function getInstance(?CompilerRuntime $runtime = null): Translator
     {
         if (self::$instance === null) {
-            self::$instance = new self(TYPEPHP_ROOT_PATH);
+            if ($runtime === null) {
+                throw new \LogicException('The compiler runtime has not been initialized');
+            }
+            self::$instance = new self($runtime->installationRoot, $runtime);
         }
         return self::$instance;
     }
@@ -2376,7 +2380,7 @@ CODE;
     /** @param list<string> $generatedSources @return list<string> */
     private function composeNanoRuntimeSources(array $generatedSources): array
     {
-        $composition = (new NanoSourceComposer())->compose(
+        $composition = (new NanoSourceComposer($this->compilerRuntime->installationRoot))->compose(
             $this->getBuildDir(),
             $this->targetName,
             true,

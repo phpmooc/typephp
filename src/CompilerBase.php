@@ -10,6 +10,7 @@ namespace TypePhp;
 
 use TypePhp\Analysis\CompilationStatistics;
 use TypePhp\Build\AstCache;
+use TypePhp\Build\CompilerRuntime;
 use TypePhp\Build\PhpxLocator;
 use TypePhp\Build\StableIdRegistry;
 
@@ -630,6 +631,7 @@ class CompilerBase implements PropertyAccessContext
     protected bool $decimalTypes = false;
     protected bool $bigintTypes = false;
     protected string $rootPath;
+    protected CompilerRuntime $compilerRuntime;
     protected string $buildDir;
     protected string $targetName = 'app';
     protected string $outputDir = '';    // Output directory specified by the -o option
@@ -684,7 +686,7 @@ class CompilerBase implements PropertyAccessContext
     /** @var array<string, true> Fully resolved class names referenced by source code. */
     protected array $referencedClasses = [];
 
-    public function __construct(string $rootPath)
+    public function __construct(string $rootPath, ?CompilerRuntime $compilerRuntime = null)
     {
         $this->osType = PHP_OS_FAMILY;
         if (version_compare(PHP_VERSION, '8.4.0', '<')) {
@@ -694,6 +696,8 @@ class CompilerBase implements PropertyAccessContext
             $this->error('PHP 8.6.0 or later is not supported');
         }
         $this->rootPath = $rootPath;
+        $this->compilerRuntime = $compilerRuntime
+            ?? CompilerRuntime::nativeAt($rootPath, PHP_BINARY);
         $this->compilationStatistics = new CompilationStatistics();
         $this->symbols = new SymbolRepository();
         $this->setPhpVersion(self::DEFAULT_PHP_VERSION);

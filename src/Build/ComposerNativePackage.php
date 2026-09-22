@@ -29,7 +29,7 @@ final readonly class ComposerNativePackage
     }
 
     /** @return list<self> */
-    public static function discover(): array
+    public static function discover(?string $compilerRoot = null): array
     {
         $packages = [];
         foreach (InstalledVersions::getInstalledPackages() as $package) {
@@ -43,7 +43,7 @@ final readonly class ComposerNativePackage
                 || !is_array($manifest['extra']['typephp-native'] ?? null)) {
                 continue;
             }
-            $packages[] = self::load($package);
+            $packages[] = self::load($package, $compilerRoot);
         }
 
         usort(
@@ -57,19 +57,20 @@ final readonly class ComposerNativePackage
         return $packages;
     }
 
-    public static function load(string $package): self
+    public static function load(string $package, ?string $compilerRoot = null): self
     {
         if ($package === 'swoole/php-ext-standard') {
             throw new RuntimeException(
                 'The standard extension is built into swoole/php-nano; remove obsolete package `swoole/php-ext-standard`'
             );
         }
-        $installPath = class_exists(InstalledVersions::class) && InstalledVersions::isInstalled($package)
-            ? InstalledVersions::getInstallPath($package)
-            : null;
-        $root = is_string($installPath) ? realpath($installPath) : false;
-        if ($root === false) {
-            $root = self::resolveSiblingPackage($package);
+        $root = self::resolveLocalPackage($package, $compilerRoot);
+        if ($root === null) {
+            $installPath = class_exists(InstalledVersions::class) && InstalledVersions::isInstalled($package)
+                ? InstalledVersions::getInstallPath($package)
+                : null;
+            $resolvedInstallPath = is_string($installPath) ? realpath($installPath) : false;
+            $root = $resolvedInstallPath !== false ? $resolvedInstallPath : null;
         }
         if ($root === null) {
             throw new RuntimeException(
@@ -249,21 +250,29 @@ final readonly class ComposerNativePackage
      * The same layout is used by the monorepo checkout, where a package may not
      * yet be present in the checkout's generated InstalledVersions metadata.
      */
-    private static function resolveSiblingPackage(string $package): ?string
+    private static function resolveLocalPackage(string $package, ?string $compilerRoot): ?string
     {
-        if (!defined('TYPEPHP_ROOT_PATH') || !str_starts_with($package, 'swoole/')) {
+        if ($compilerRoot === null || !str_starts_with($package, 'swoole/')) {
             return null;
         }
-        $candidate = realpath(
-            dirname(TYPEPHP_ROOT_PATH) . DIRECTORY_SEPARATOR . substr($package, strlen('swoole/')),
-        );
-        if ($candidate === false || !is_dir($candidate)) {
-            return null;
+
+        $packageDirectory = substr($package, strlen('swoole/'));
+        $candidates = [
+            $compilerRoot . '/vendor/swoole/' . $packageDirectory,
+            $compilerRoot . '/' . $packageDirectory,
+            dirname($compilerRoot) . '/' . $packageDirectory,
+        ];
+        foreach ($candidates as $path) {
+            $candidate = realpath($path);
+            if ($candidate === false || !is_dir($candidate)) {
+                continue;
+            }
+            $manifest = json_decode((string) @file_get_contents($candidate . '/composer.json'), true);
+            if (is_array($manifest) && ($manifest['name'] ?? null) === $package) {
+                return $candidate;
+            }
         }
-        $manifest = json_decode((string) @file_get_contents($candidate . '/composer.json'), true);
-        return is_array($manifest) && ($manifest['name'] ?? null) === $package
-            ? $candidate
-            : null;
+        return null;
     }
 
     /** @return list<string> */

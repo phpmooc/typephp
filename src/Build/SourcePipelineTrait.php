@@ -589,7 +589,7 @@ trait SourcePipelineTrait
         // file processing/compilation. The compiled tpc executable has libphpx
         // loaded by the dynamic linker before entering main(), so checking here
         // is neither needed nor possible.
-        if (defined('TYPEPHP_PHP_SCRIPT_ENTRY') && !($platform instanceof Wasi)) {
+        if ($this->compilerRuntime->sourceEntry && !($platform instanceof Wasi)) {
             $this->validatePhpxLibrary();
         }
     }
@@ -607,7 +607,7 @@ trait SourcePipelineTrait
                 $this->getPhpDir(),
                 $this->getPhpxDir(),
                 $this->buildMode,
-                defined('TYPEPHP_PHP_SCRIPT_ENTRY'),
+                $this->compilerRuntime->sourceEntry,
             ) as $message) {
                 if (!empty($message['error'])) {
                     $detail = $message['error'];

@@ -78,7 +78,7 @@ final class CompilationStatisticsTest extends BaseTest
         self::assertTrue($selection->completeFallback);
         self::assertSame(['json', 'standard'], $selection->extensions);
 
-        $composition = (new NanoSourceComposer())->compose(
+        $composition = (new NanoSourceComposer(TYPEPHP_ROOT_PATH))->compose(
             sys_get_temp_dir() . '/typephp-nano-dynamic-fallback-test',
             'dynamic_fallback_test',
             false,
@@ -122,7 +122,7 @@ final class CompilationStatisticsTest extends BaseTest
         self::assertSame(['date'], $selection->extensions);
         self::assertSame([], $selection->features);
 
-        $composition = (new NanoSourceComposer())->compose(
+        $composition = (new NanoSourceComposer(TYPEPHP_ROOT_PATH))->compose(
             sys_get_temp_dir() . '/typephp-nano-date-component-test',
             'date_component_test',
             false,
@@ -156,7 +156,7 @@ final class CompilationStatisticsTest extends BaseTest
         $statistics->record(CompilationStatistics::DIRECT_FUNCTIONS, 'array_keys');
         $statistics->finish();
 
-        $composition = (new NanoSourceComposer())->compose(
+        $composition = (new NanoSourceComposer(TYPEPHP_ROOT_PATH))->compose(
             sys_get_temp_dir() . '/typephp-nano-component-test',
             'component_test',
             false,
@@ -186,7 +186,7 @@ final class CompilationStatisticsTest extends BaseTest
         $statistics->record(CompilationStatistics::DIRECT_FUNCTIONS, 'json_encode');
         $statistics->finish();
 
-        $composition = (new NanoSourceComposer())->compose(
+        $composition = (new NanoSourceComposer(TYPEPHP_ROOT_PATH))->compose(
             sys_get_temp_dir() . '/typephp-nano-shared-standard-test',
             'shared_standard_test',
             false,

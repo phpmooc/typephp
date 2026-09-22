@@ -3,7 +3,7 @@ use TypePhp\Translator;
 use TypePhp\Build\WasiToolchain;
 use TypePhp\Build\WasiProjectConfig;
 use TypePhp\Build\PhpxLocator;
-use TypePhp\Build\ExecutableLocator;
+use TypePhp\Build\CompilerRuntime;
 use TypePhp\Build\NativeSourceProjectBuilder;
 use TypePhp\Build\NativeSourceProjectConfig;
 use TypePhp\Build\ProjectBuildRunner;
@@ -12,22 +12,18 @@ use TypePhp\Cli\CompletionCommand;
 
 function main(int $argc, array $argv): void
 {
+    runCompiler($argc, $argv, CompilerRuntime::native($argv[0]));
+}
+
+function runCompiler(int $argc, array $argv, CompilerRuntime $runtime): void
+{
     // Compiling a complete project keeps the parsed AST and generated sources in
     // memory. The default CLI limit (commonly 128M) is too small for larger builds.
     ini_set('memory_limit', '-1');
 
-    $compilerExecutable = ExecutableLocator::resolve($argv[0]) ?? $argv[0];
-    if (!defined('TYPEPHP_COMPILER_EXECUTABLE')) {
-        define('TYPEPHP_COMPILER_EXECUTABLE', $compilerExecutable);
-    }
-    if (!defined('TYPEPHP_ROOT_PATH')) {
-        $compilerRoot = realpath(dirname($compilerExecutable));
-        define('TYPEPHP_ROOT_PATH', $compilerRoot !== false ? $compilerRoot : dirname($compilerExecutable));
-    }
-
     // The PHP entrypoint already loaded Composer's project autoloader in
     // bin/bootstrap.php. The native binary loads its embedded copy here.
-    if (!defined('TYPEPHP_PHP_SCRIPT_ENTRY')) {
+    if (!$runtime->sourceEntry) {
         require_once dirname(__DIR__) . '/vendor/autoload.php';
     }
 
@@ -54,12 +50,12 @@ function main(int $argc, array $argv): void
         exit(1);
     }
     if ($nativeSourceProject) {
-        compileNativeSourceProject($argv);
+        compileNativeSourceProject($argv, $runtime);
         return;
     }
 
     if (getenv('TYPEPHP_WASM_INTERNAL_COMPILE') !== '1' && shouldCompileWasm($argv)) {
-        compileWasmProgram($argv, $compilerExecutable);
+        compileWasmProgram($argv, $runtime);
         return;
     }
 
@@ -69,7 +65,7 @@ function main(int $argc, array $argv): void
         return;
     }
 
-    (new ProjectBuildRunner(Translator::getInstance()))->run($argv);
+    (new ProjectBuildRunner(Translator::getInstance($runtime)))->run($argv);
 }
 
 function shouldCompileNativeSourceProject(array $argv): bool
@@ -87,7 +83,7 @@ function shouldCompileNativeSourceProject(array $argv): bool
     return false;
 }
 
-function compileNativeSourceProject(array $argv): void
+function compileNativeSourceProject(array $argv, CompilerRuntime $runtime): void
 {
     $input = null;
     $buildDir = null;
@@ -133,7 +129,7 @@ function compileNativeSourceProject(array $argv): void
 
     try {
         $project = NativeSourceProjectConfig::load($input, $buildDir);
-        $builder = new NativeSourceProjectBuilder();
+        $builder = new NativeSourceProjectBuilder(compilerRuntime: $runtime);
         $result = $builder->build($project);
         fwrite(
             STDOUT,
@@ -155,7 +151,7 @@ function compileNativeSourceProject(array $argv): void
  * The lower-level build scripts are implementation details and are not part of
  * the user-facing workflow.
  */
-function compileWasmProgram(array $argv, string $compilerExecutable): void
+function compileWasmProgram(array $argv, CompilerRuntime $runtime): void
 {
     $input = null;
     $buildDir = null;
@@ -222,7 +218,7 @@ function compileWasmProgram(array $argv, string $compilerExecutable): void
             $input,
             $buildDir,
             $workingDirectory,
-            TYPEPHP_ROOT_PATH . DIRECTORY_SEPARATOR . 'build',
+            $runtime->installationRoot . DIRECTORY_SEPARATOR . 'build',
             $profile,
         );
     } catch (RuntimeException $exception) {
@@ -230,7 +226,7 @@ function compileWasmProgram(array $argv, string $compilerExecutable): void
         exit(1);
     }
 
-    $builder = dirname(__DIR__) . '/wasm/'
+    $builder = $runtime->installationRoot . '/wasm/'
         . ($nano ? 'build-nano-program.sh' : 'build-program.sh');
     if (!is_executable($builder)) {
         fwrite(STDERR, "TypePHP WASI builder is not executable: {$builder}\n");
@@ -278,7 +274,7 @@ function compileWasmProgram(array $argv, string $compilerExecutable): void
     $environment['TYPEPHP_WASM_PACKAGE'] = $project->package;
     $environment['TYPEPHP_WASM_WORLD'] = $project->world;
     $environment['TYPEPHP_WASM_NANO'] = $nano ? '1' : '0';
-    if (!is_file($compilerExecutable) || !is_executable($compilerExecutable)) {
+    if (!is_file($runtime->executable) || !is_executable($runtime->executable)) {
         fwrite(STDERR, "Unable to resolve the current TypePHP compiler executable: {$argv[0]}\n");
         exit(1);
     }
@@ -287,7 +283,7 @@ function compileWasmProgram(array $argv, string $compilerExecutable): void
     }
 
     try {
-        $phpxDir = PhpxLocator::resolve(TYPEPHP_ROOT_PATH);
+        $phpxDir = PhpxLocator::resolve($runtime->installationRoot);
     } catch (RuntimeException $exception) {
         fwrite(STDERR, "Unable to locate PHPX: {$exception->getMessage()}\n");
         exit(1);
@@ -295,7 +291,7 @@ function compileWasmProgram(array $argv, string $compilerExecutable): void
     if ($project->mode === 'library') {
         $environment['TYPEPHP_WIT_BINDGEN'] = $tools['wit-bindgen'];
     }
-    $command = [$builder, $project->input, $project->output ?? '-', $phpxDir, $compilerExecutable];
+    $command = [$builder, $project->input, $project->output ?? '-', $phpxDir, $runtime->executable];
 
     $process = proc_open(
         $command,

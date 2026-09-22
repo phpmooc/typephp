@@ -16,8 +16,10 @@ final class NativeSourceProjectBuilder
     private bool $progressLineActive = false;
     private int $progressLineWidth = 0;
 
-    public function __construct(private readonly bool $lineProgress = false)
-    {
+    public function __construct(
+        private readonly CompilerRuntime $compilerRuntime,
+        private readonly bool $lineProgress = false,
+    ) {
     }
 
     /** @return array{output: string, sourceCount: int, compiledCount: int} */
@@ -45,7 +47,7 @@ final class NativeSourceProjectBuilder
                 'Generating C++ from ' . count($project->phpSources) . ' TypePHP source file(s)'
             );
             $generatedDir = $project->buildDir . DIRECTORY_SEPARATOR . 'generated';
-            $translator = Translator::getInstance();
+            $translator = Translator::getInstance($this->compilerRuntime);
             $phpFiles = $translator->prepareNanoSources(
                 $project->phpSources,
                 $this->projectSymbolName($project),
@@ -56,7 +58,7 @@ final class NativeSourceProjectBuilder
             $generatedIncludeDir = $generatedDir . DIRECTORY_SEPARATOR . 'include';
         }
 
-        $composition = (new NanoSourceComposer())->compose(
+        $composition = (new NanoSourceComposer($this->compilerRuntime->installationRoot))->compose(
             $project->buildDir,
             $this->projectSymbolName($project),
             $project->phpSources !== [],
