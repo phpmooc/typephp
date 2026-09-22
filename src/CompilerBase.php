@@ -3507,28 +3507,9 @@ class CompilerBase implements PropertyAccessContext
                         return Type::VAR;
                     }
                     $globalName = ltrim($name, '\\');
-                    // Math function optimization: propagate Big* return types
-                    if (in_array($name, ['abs', 'pow', 'sqrt', 'floor', 'ceil', 'round'], true)
-                        && !empty($expr->args)) {
-                        $argType = $this->detectTypeOfExpr($expr->args[0]->value);
-                        if (
-                            $argType === Type::BIGINT
-                            && in_array($name, ['abs', 'pow', 'sqrt'], true)
-                        ) {
-                            return Type::BIGINT;
-                        }
-                        if (
-                            $argType === Type::DECIMAL
-                            && in_array($name, ['abs', 'pow', 'sqrt', 'floor', 'ceil', 'round'], true)
-                        ) {
-                            return Type::DECIMAL;
-                        }
-                        if (
-                            $argType === Type::BIGFLOAT
-                            && in_array($name, ['abs', 'sqrt'], true)
-                        ) {
-                            return Type::BIGFLOAT;
-                        }
+                    $mathReturnType = $this->detectMathCallReturnType($functionTarget['lower'], $expr);
+                    if ($mathReturnType !== null) {
+                        return $mathReturnType;
                     }
                     if (in_array($name, self::STREAM_FUNCTIONS)) {
                         return Type::STREAM;
@@ -3699,6 +3680,39 @@ class CompilerBase implements PropertyAccessContext
         }
 
         return Type::VAR;
+    }
+
+    /**
+     * Return the result type selected by TypePHP's statically dispatched math
+     * overloads. Dynamic operands retain the runtime function's union type.
+     */
+    protected function detectMathCallReturnType(string $name, Expr\FuncCall $expr): ?string
+    {
+        if ($expr->args === [] || $expr->args[0]->unpack) {
+            return null;
+        }
+
+        $argType = $this->detectTypeOfExpr($expr->args[0]->value);
+        if ($name === 'abs' && in_array($argType, [
+            Type::INT,
+            Type::FLOAT,
+            Type::BIGINT,
+            Type::DECIMAL,
+            Type::BIGFLOAT,
+        ], true)) {
+            return $argType;
+        }
+        if ($argType === Type::BIGINT && in_array($name, ['pow', 'sqrt'], true)) {
+            return Type::BIGINT;
+        }
+        if ($argType === Type::DECIMAL && in_array($name, ['pow', 'sqrt', 'floor', 'ceil', 'round'], true)) {
+            return Type::DECIMAL;
+        }
+        if ($argType === Type::BIGFLOAT && $name === 'sqrt') {
+            return Type::BIGFLOAT;
+        }
+
+        return null;
     }
 
     protected function genDynamicPropIncDec($var, string $op, bool $isPre): ?string
