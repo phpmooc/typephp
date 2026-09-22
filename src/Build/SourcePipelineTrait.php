@@ -24,10 +24,10 @@ trait SourcePipelineTrait
     use PreparedProjectCacheTrait;
 
     /** @var list<string> PHP files selected by embedded-files. */
-    private array $bundledPhpFiles = [];
+    private array $embeddedPhpFiles = [];
 
     /** @var list<string> All regular files selected by embedded-files. */
-    private array $bundledFiles = [];
+    private array $embeddedFiles = [];
 
     /** @var list<string> Selected PHP files not translated to native code. */
     private array $embeddedOpcodeFiles = [];
@@ -595,52 +595,15 @@ PHP
             $this->getBuildDir() . '/embedded-files-' . $this->targetName . '.bin',
             $archive,
         );
-        $rawIndex = [];
-        $opcodeIndex = [];
         $sources = [$output];
-        if ($this->bundledFiles !== [] || $files !== []) {
-            $temporaryArchive = $archive . '.tmp';
-            if (!is_dir(dirname($archive))
-                && !mkdir(dirname($archive), 0777, true) && !is_dir(dirname($archive))) {
-                throw new \RuntimeException('Cannot create embedded archive directory: ' . dirname($archive));
-            }
-            $stream = fopen($temporaryArchive, 'wb');
-            if ($stream === false) {
-                throw new \RuntimeException("Cannot create embedded file archive: {$temporaryArchive}");
-            }
-            foreach ($this->bundledFiles as $file) {
-                $offset = ftell($stream);
-                $input = fopen($file, 'rb');
-                if ($input === false) {
-                    throw new \RuntimeException("Cannot read embedded file: {$file}");
-                }
-                $length = stream_copy_to_stream($input, $stream);
-                fclose($input);
-                if ($length === false) {
-                    throw new \RuntimeException("Cannot copy embedded file: {$file}");
-                }
-                $rawIndex[$file] = [$offset, $length];
-            }
-            foreach ($blobs as $file => $blobFile) {
-                $offset = ftell($stream);
-                $input = fopen($blobFile, 'rb');
-                if ($input === false) {
-                    throw new \RuntimeException("Cannot read opcode blob: {$blobFile}");
-                }
-                $length = stream_copy_to_stream($input, $stream);
-                fclose($input);
-                if ($length === false) {
-                    throw new \RuntimeException("Cannot copy opcode blob: {$blobFile}");
-                }
-                $opcodeIndex[$this->anonymousOpcodeKeys[$file] ?? $file] = [$offset, $length];
-            }
-            fclose($stream);
-            if (!is_file($archive) || hash_file('sha256', $archive) !== hash_file('sha256', $temporaryArchive)) {
-                rename($temporaryArchive, $archive);
-            } else {
-                unlink($temporaryArchive);
-            }
-            $archiveHash = hash_file('sha256', $archive);
+        $embeddedArchive = EmbeddedArchive::empty($archive);
+        if ($this->embeddedFiles !== [] || $files !== []) {
+            $embeddedArchive = (new EmbeddedArchiveBuilder())->build(
+                $archive,
+                $this->embeddedFiles,
+                $blobs,
+                $this->anonymousOpcodeKeys,
+            );
             if ($this->isWindows()) {
                 $this->embeddedArchiveFile = $archive;
             } else {
@@ -649,47 +612,22 @@ PHP
                 $section = $this->isMacos() ? '__TEXT,__const' : '.rodata';
                 $symbol = $this->isMacos()
                     ? '_typephp_embedded_archive_start' : 'typephp_embedded_archive_start';
-                $asmCode = "# archive-sha256: {$archiveHash}\n.section {$section}\n.globl {$symbol}\n.p2align 4\n{$symbol}:\n.incbin {$quotedArchive}\n";
+                $asmCode = "# archive-sha256: {$embeddedArchive->hash}\n.section {$section}\n.globl {$symbol}\n.p2align 4\n{$symbol}:\n.incbin {$quotedArchive}\n";
                 $this->writeFile($assembly, $asmCode);
                 $this->generatedProjectSources[$assembly] = true;
                 $sources[] = $assembly;
             }
             $this->output(
-                'Packed ' . count($rawIndex) . ' files and ' . count($opcodeIndex) . ' opcode blobs',
+                'Packed ' . count($embeddedArchive->fileIndex) . ' files and '
+                    . count($embeddedArchive->opcodeIndex) . ' opcode blobs',
                 'green',
             );
         }
 
-        $code = '#include <typephp_opcode_table.h>' . PHP_EOL;
-        $hasArchive = $this->bundledFiles !== [] || $files !== [];
-        if ($hasArchive && $this->isWindows()) {
-            $code .= 'static const uint8_t *const typephp_embedded_archive_start = typephp_embedded_archive_data();' . PHP_EOL;
-        } elseif ($hasArchive) {
-            $code .= 'extern "C" const uint8_t typephp_embedded_archive_start[];' . PHP_EOL;
-        }
-        $code .= 'static const typephp_opcode_entry typephp_opcodes[] = {' . PHP_EOL;
-        foreach ($opcodeIndex as $file => [$offset, $length]) {
-            $path = json_encode($file, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
-            $code .= "    {{$path}, typephp_embedded_archive_start + {$offset}, {$length}}," . PHP_EOL;
-        }
-        $code .= '    {nullptr, nullptr, 0},' . PHP_EOL . '};' . PHP_EOL;
-        $code .= 'extern "C" const typephp_opcode_entry *typephp_project_opcode_table(size_t *count) {' . PHP_EOL;
-        $code .= '    *count = ' . count($opcodeIndex) . '; return typephp_opcodes;' . PHP_EOL . '}' . PHP_EOL;
-        $code .= 'static const typephp_embedded_file_entry typephp_embedded_files[] = {' . PHP_EOL;
-        foreach ($rawIndex as $file => [$offset, $length]) {
-            $path = json_encode($file, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
-            $code .= "    {{$path}, typephp_embedded_archive_start + {$offset}, {$length}}," . PHP_EOL;
-        }
-        $code .= '    {nullptr, nullptr, 0},' . PHP_EOL . '};' . PHP_EOL;
-        $code .= 'extern "C" const typephp_embedded_file_entry *typephp_project_embedded_file_table(size_t *count) {' . PHP_EOL;
-        $code .= '    *count = ' . count($rawIndex) . '; return typephp_embedded_files;' . PHP_EOL . '}' . PHP_EOL;
-        $version = json_encode($phpVersion, JSON_THROW_ON_ERROR);
-        $code .= 'extern "C" const char *typephp_project_php_version(void) { return ' . $version . '; }' . PHP_EOL;
-        if ($rawIndex === [] && $opcodeIndex === []) {
-            $code .= 'extern "C" void typephp_opcode_table_install(void) {}' . PHP_EOL;
-            $code .= 'extern "C" void typephp_opcode_table_uninstall(void) {}' . PHP_EOL;
-        }
-        $this->writeFile($output, $code);
+        $this->writeFile(
+            $output,
+            (new EmbeddedTableRenderer())->render($embeddedArchive, $phpVersion, $this->isWindows()),
+        );
         $this->generatedProjectSources[$output] = true;
         foreach (glob($this->getBuildDir() . '/anonymous-*.json') ?: [] as $legacyManifest) {
             unlink($legacyManifest);
@@ -734,10 +672,10 @@ PHP
         // Apply command-line arguments after all configuration is loaded (so they
         // take the highest precedence)
         $this->applyCommandLineArguments();
-        if ($this->bundledFiles !== [] && !$this->isBuildModeBin()) {
+        if ($this->embeddedFiles !== [] && !$this->isBuildModeBin()) {
             $this->error('`embedded-files` requires `mode: bin`');
         }
-        if ($this->bundledFiles !== []) {
+        if ($this->embeddedFiles !== []) {
             $this->getOpcodeBuildExtensionArgs();
         }
         if ($this->climate->arguments->defined('force')) {
@@ -833,7 +771,7 @@ PHP
         $files = $this->filterIgnoredFiles($files);
         $preparedKey = $this->preparedProjectKey($files);
         if ($this->restorePreparedProject($preparedKey)) {
-            $this->embeddedOpcodeFiles = array_values(array_diff($this->bundledPhpFiles, $files));
+            $this->embeddedOpcodeFiles = array_values(array_diff($this->embeddedPhpFiles, $files));
             $files = $this->getSortedFiles($files);
             $this->initializeIncrementalCompilation($files);
             return $files;
@@ -867,7 +805,7 @@ PHP
             $this->storePreparedProject($preparedKey);
         }
         $files = $this->getSortedFiles($files);
-        $this->embeddedOpcodeFiles = array_values(array_diff($this->bundledPhpFiles, $files));
+        $this->embeddedOpcodeFiles = array_values(array_diff($this->embeddedPhpFiles, $files));
         $this->initializeIncrementalCompilation($files);
         return $files;
     }
@@ -1089,7 +1027,7 @@ PHP
                 } catch (Unsupported $e) {
                     echo ' unsupported syntax: ' . $e->getMessage() . "\n";
                     echo ' skip: ' . $file . "\n";
-                    if (in_array($file, $this->bundledPhpFiles, true)
+                    if (in_array($file, $this->embeddedPhpFiles, true)
                         && !in_array($file, $this->embeddedOpcodeFiles, true)) {
                         $this->embeddedOpcodeFiles[] = $file;
                     }
@@ -1126,7 +1064,7 @@ PHP
             // metadata, then adds a direct native process entry beside it.
             $sourceFiles[] = $this->genExtension();
             if ($this->isBuildModeEmbed() && !$this->isNanoMode()
-                && ($this->bundledFiles !== [] || $this->embeddedOpcodeFiles !== [])) {
+                && ($this->embeddedFiles !== [] || $this->embeddedOpcodeFiles !== [])) {
                 array_push($sourceFiles, ...$this->genEmbeddedOpcodeTable());
             }
             if ($this->isNanoMode()) {

@@ -1235,7 +1235,7 @@ class Translator extends Preprocessor
 
         if ($this->isBuildModeEmbed() && !$this->isNanoMode()) {
             $code .= '#include <typephp_runtime.h>' . PHP_EOL;
-            if ($this->bundledFiles === [] && $this->embeddedOpcodeFiles === []) {
+            if ($this->embeddedFiles === [] && $this->embeddedOpcodeFiles === []) {
                 // The runtime still calls these hooks; keep empty builds in this translation unit.
                 $code .= 'extern "C" void typephp_opcode_table_install(void) {}' . PHP_EOL;
                 $code .= 'extern "C" void typephp_opcode_table_uninstall(void) {}' . PHP_EOL;
@@ -2143,7 +2143,7 @@ CODE;
         $ext = strtolower(pathinfo($filePath, PATHINFO_EXTENSION));
         return match ($ext) {
             'c' => 'c',
-            's', 'S' => 'assembler',
+            's' => 'assembler',
             'm' => 'objective-c',
             'mm' => 'objective-c++',
             'cc', 'cpp', 'cxx' => null,
@@ -2237,10 +2237,7 @@ CODE;
     /** @param array{cacheable_misc: bool, nano_runtime: bool, generated_project: bool} $task */
     private function finalizeCompileFileTask(string $cppFile, string $objectFile, array $task): void
     {
-        if ($task['cacheable_misc']) {
-            $this->writeMiscObjectCacheMetadata($cppFile, $objectFile);
-        }
-        if ($task['nano_runtime']) {
+        if ($task['cacheable_misc'] || $task['nano_runtime']) {
             $this->writeMiscObjectCacheMetadata($cppFile, $objectFile);
         }
         if ($task['generated_project']) {
@@ -2309,7 +2306,7 @@ CODE;
                 $sourceFiles[] = $runtimeSource;
             }
             $sourceFiles[] = $this->getPhpxDir() . '/src/misc/typephp_main.cc';
-            if ($this->bundledFiles !== [] || $this->embeddedOpcodeFiles !== []) {
+            if ($this->embeddedFiles !== [] || $this->embeddedOpcodeFiles !== []) {
                 $sourceFiles[] = $this->getPhpxDir() . '/src/misc/typephp_opcode_table.cc';
                 // Select the decoder for the PHP CLI that generated the blobs.
                 // Distribution PHP headers need not live under the PHP prefix.
@@ -4065,7 +4062,7 @@ CODE;
                     $this->error('Embedded file or directory does not exist: `' . $src . '`');
                 }
                 if (is_file($resolved)) {
-                    $this->bundledFiles[] = $resolved;
+                    $this->embeddedFiles[] = $resolved;
                     continue;
                 }
                 $iterator = new \RecursiveIteratorIterator(
@@ -4073,23 +4070,23 @@ CODE;
                 );
                 foreach ($iterator as $file) {
                     if ($file->isFile()) {
-                        $this->bundledFiles[] = $file->getPathname();
+                        $this->embeddedFiles[] = $file->getPathname();
                     }
                 }
             }
-            $this->bundledFiles = array_values(array_unique($this->bundledFiles));
-            sort($this->bundledFiles, SORT_STRING);
-            $this->bundledPhpFiles = array_values(array_filter(
-                $this->bundledFiles,
+            $this->embeddedFiles = array_values(array_unique($this->embeddedFiles));
+            sort($this->embeddedFiles, SORT_STRING);
+            $this->embeddedPhpFiles = array_values(array_filter(
+                $this->embeddedFiles,
                 // PHP extension stubs are API declarations for code generators.
                 // They remain in the raw archive but must never be executed.
                 static fn(string $file): bool => FileScanner::isPhpFile($file)
                     && !str_ends_with($file, '.stub.php'),
             ));
-            if ($this->bundledFiles !== []) {
+            if ($this->embeddedFiles !== []) {
                 $this->output(
-                    'embedded-files: found ' . count($this->bundledFiles)
-                    . ' files (' . count($this->bundledPhpFiles) . ' PHP)',
+                    'embedded-files: found ' . count($this->embeddedFiles)
+                    . ' files (' . count($this->embeddedPhpFiles) . ' PHP)',
                     'lightBlue',
                 );
             }
