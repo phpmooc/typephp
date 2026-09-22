@@ -464,37 +464,46 @@ trait SourcePipelineTrait
     public function getFiles(string $path): array
     {
         $this->applyPhpVersionCommandLineArgument();
-        $realpath = realpath($path);
-        if ($realpath === false) {
+        $projectPath = realpath($path);
+        if ($projectPath === false) {
             $this->error("path not exists: {$path}");
         }
-        $path = $realpath;
+        $files = $this->discoverProjectFiles($projectPath);
 
+        // Command-line values have the highest precedence and therefore apply
+        // only after a YAML project has loaded all included configuration.
+        $this->applyCommandLineArguments();
+        $this->validateLoadedProjectConfiguration();
+        $files = $this->excludeGeneratedLibraryStub($files);
+        return $this->filterIgnoredFiles($files);
+    }
+
+    /** @return list<string> */
+    private function discoverProjectFiles(string $path): array
+    {
         if (is_dir($path)) {
             // Directory mode: no YAML parsing
-            $list = $this->getFilesFromDir($path);
-            $targetName = basename($path);
-            $this->setTargetName($targetName);
+            $files = $this->getFilesFromDir($path);
+            $this->setTargetName(basename($path));
             $this->sourceDirs[] = $path;
-        } else {
-            $ext = pathinfo($path, PATHINFO_EXTENSION);
-            if ($ext === 'yml' || $ext === 'yaml') {
-                // YAML config mode: parse the YAML first
-                $list = $this->parseProjectYaml($path);
-            } elseif ($ext === 'php') {
-                // Single-file mode: no YAML parsing
-                $list = [$path];
-                $targetName = FileScanner::getFileName($path);
-                $this->setTargetName($targetName);
-                $this->sourceDirs[] = dirname($path);
-            } else {
-                $this->error('Unsupported file type: ' . $path);
-            }
+            return $files;
         }
 
-        // Apply command-line arguments after all configuration is loaded (so they
-        // take the highest precedence)
-        $this->applyCommandLineArguments();
+        $extension = pathinfo($path, PATHINFO_EXTENSION);
+        if ($extension === 'yml' || $extension === 'yaml') {
+            return $this->parseProjectYaml($path);
+        }
+        if ($extension === 'php') {
+            // Single-file mode: no YAML parsing
+            $this->setTargetName(FileScanner::getFileName($path));
+            $this->sourceDirs[] = dirname($path);
+            return [$path];
+        }
+        $this->error('Unsupported file type: ' . $path);
+    }
+
+    private function validateLoadedProjectConfiguration(): void
+    {
         if ($this->embeddedFiles !== [] && !$this->isBuildModeBin()) {
             $this->error('`embedded-files` requires `mode: bin`');
         }
@@ -505,65 +514,88 @@ trait SourcePipelineTrait
             $this->clearIncrementalBuildCache();
         }
         $this->validateProjectObjectFiles();
+    }
 
+    /** @param list<string> $files @return list<string> */
+    private function excludeGeneratedLibraryStub(array $files): array
+    {
         // The generated public import stub is an output artifact, not an input
         // of the library that produced it. Exclude a previous build's copy when
         // a project scans its output directory recursively.
-        if ($this->isBuildModeLib()) {
-            $generatedStub = realpath($this->getLibraryImportStubFile());
-            if ($generatedStub !== false) {
-                $list = array_values(array_filter(
-                    $list,
-                    static fn(string $file): bool => realpath($file) !== $generatedStub,
-                ));
-            }
+        if (!$this->isBuildModeLib()) {
+            return $files;
         }
-
-        return $this->filterIgnoredFiles($list);
+        $generatedStub = realpath($this->getLibraryImportStubFile());
+        if ($generatedStub === false) {
+            return $files;
+        }
+        return array_values(array_filter(
+            $files,
+            static fn(string $file): bool => realpath($file) !== $generatedStub,
+        ));
     }
 
     public function prepare(string $path): array
     {
         $files = $this->getFiles($path);
+        $this->prepareBuildEnvironment();
+        $preparedKey = $this->preparedProjectKey($files);
+        if (!$this->restorePreparedProject($preparedKey)) {
+            $files = $this->preprocessProjectFiles($files, $preparedKey);
+        }
+        return $this->finalizePreparedProject($files);
+    }
 
+    private function prepareBuildEnvironment(): void
+    {
+        $this->prepareRuntimeDependencies();
+        $this->validateCompilerToolchain();
+        $this->reportBuildLibraryWarnings();
+    }
+
+    private function prepareRuntimeDependencies(): void
+    {
         // Source-composed Nano does not consume the host PHP/PHPX runtime.
         // Windows Nano deliberately leaves nanoMode=false and therefore keeps
         // this original DLL/import-library validation path.
-        if (!$this->isNanoMode()) {
-            if ($this->isBuildModeEmbed() && $this->getPlatform() instanceof Linux) {
-                try {
-                    $phpDir = (new LibPhpInstaller())->ensure($this->getPhpDir()) ?? $this->getPhpDir();
-                } catch (\Throwable $e) {
-                    $this->error('Unable to install libphp.so: ' . $e->getMessage());
-                }
-            } else {
-                $phpDir = $this->getPhpDir();
-            }
+        if ($this->isNanoMode()) {
+            return;
+        }
 
-            if (!($this->getPlatform() instanceof Wasi)) {
-                $this->validatePhpRuntimeMinimum($phpDir);
-            }
-
-            if ($this->getPlatform() instanceof Linux) {
-                try {
-                    (new LibPhpxInstaller())->ensure($this->getPhpxDir(), $phpDir);
-                } catch (\Throwable $e) {
-                    $this->error('Unable to build libphpx.so: ' . $e->getMessage());
-                }
-            }
-
-            // Pre-check the phpx library only at the PHP script entry (bin/tpc.php):
-            // a missing library fails immediately rather than surfacing later during
-            // file processing/compilation. The compiled tpc executable has libphpx
-            // loaded by the dynamic linker before entering main(), so checking here
-            // is neither needed nor possible.
-            if (defined('TYPEPHP_PHP_SCRIPT_ENTRY') && !($this->getPlatform() instanceof Wasi)) {
-                $this->validatePhpxLibrary();
+        $platform = $this->getPlatform();
+        $phpDir = $this->getPhpDir();
+        if ($this->isBuildModeEmbed() && $platform instanceof Linux) {
+            try {
+                $phpDir = (new LibPhpInstaller())->ensure($phpDir) ?? $phpDir;
+            } catch (\Throwable $e) {
+                $this->error('Unable to install libphp.so: ' . $e->getMessage());
             }
         }
 
-        $this->validateCompilerToolchain();
+        if (!($platform instanceof Wasi)) {
+            $this->validatePhpRuntimeMinimum($phpDir);
+        }
 
+        if ($platform instanceof Linux) {
+            try {
+                (new LibPhpxInstaller())->ensure($this->getPhpxDir(), $phpDir);
+            } catch (\Throwable $e) {
+                $this->error('Unable to build libphpx.so: ' . $e->getMessage());
+            }
+        }
+
+        // Pre-check the phpx library only at the PHP script entry (bin/tpc.php):
+        // a missing library fails immediately rather than surfacing later during
+        // file processing/compilation. The compiled tpc executable has libphpx
+        // loaded by the dynamic linker before entering main(), so checking here
+        // is neither needed nor possible.
+        if (defined('TYPEPHP_PHP_SCRIPT_ENTRY') && !($platform instanceof Wasi)) {
+            $this->validatePhpxLibrary();
+        }
+    }
+
+    private function reportBuildLibraryWarnings(): void
+    {
         // shell_exec and define are already called directly via php::fn::, so no
         // dynamic symbol table is needed
 
@@ -590,15 +622,11 @@ trait SourcePipelineTrait
                 }
             }
         }
+    }
 
-        $files = $this->filterIgnoredFiles($files);
-        $preparedKey = $this->preparedProjectKey($files);
-        if ($this->restorePreparedProject($preparedKey)) {
-            $this->embeddedOpcodeFiles = array_values(array_diff($this->embeddedPhpFiles, $files));
-            $files = $this->getSortedFiles($files);
-            $this->initializeIncrementalCompilation($files);
-            return $files;
-        }
+    /** @param list<string> $files @return list<string> */
+    private function preprocessProjectFiles(array $files, string $preparedKey): array
+    {
         $warningsBefore = $this->preprocessingWarningCount;
         $inputCount = count($files);
         $this->discoverNativeClassDeclarations($files);
@@ -627,6 +655,12 @@ trait SourcePipelineTrait
         if (count($files) === $inputCount && $this->preprocessingWarningCount === $warningsBefore) {
             $this->storePreparedProject($preparedKey);
         }
+        return array_values($files);
+    }
+
+    /** @param list<string> $files @return list<string> */
+    private function finalizePreparedProject(array $files): array
+    {
         $files = $this->getSortedFiles($files);
         $this->embeddedOpcodeFiles = array_values(array_diff($this->embeddedPhpFiles, $files));
         $this->initializeIncrementalCompilation($files);
@@ -738,165 +772,8 @@ trait SourcePipelineTrait
         try {
             $this->composeTraitDeclarations($files);
             $previousPhase = $this->enterCompilerPhase(self::PHASE_CONVERT);
-            // Hydrate persistent literal/resource IDs before any unchanged
-            // translation unit or declaration header is reused.
-            $this->getStableIdRegistry();
-            // All declarations are now known. Lower declaration constant
-            // expressions before translating any function body so cache IDs
-            // are assigned exclusively in the convert phase.
-            $this->finalizeDeclarationExpressions($this->getDeclarationInputFiles($files));
-            // Whole-program extension generation must not depend on conversion
-            // side effects from dirty files. Clean incremental files are not
-            // converted, but their non-empty property defaults still require a
-            // custom allocation path in the regenerated module entry.
-            $this->finalizeRequestArrayDefaultMetadata();
-            $this->initializeDeclarationHeaderFiles($files);
-            $this->restoreCleanIncrementalMetadata($files);
-
-            // Native/import stubs are declaration inputs, not ordinary PHP
-            // bodies. Their Zend metadata still belongs to the module entry.
-            foreach ($this->getDeclarationInputFiles($files) as $file) {
-                if ($this->isStubFile($file) && $this->shouldRegeneratePhpFile($file)) {
-                    $this->genStubFile($file);
-                }
-            }
-
-            $sourceFiles = [];
-            $validSourceCount = 0;
-            // Generate the C++ files
-            foreach ($files as $k => $file) {
-                try {
-                    if (FileScanner::isPhpFile($file)) {
-                        $path = realpath($file) ?: $file;
-                        $anonymousManifest = $this->anonymousManifestPath($path);
-                        $legacyAnonymousManifest = $this->getBuildDir() . '/anonymous-'
-                            . substr(hash('sha256', $path), 0, 20) . '.json';
-                        if (is_file($legacyAnonymousManifest)
-                            && file_get_contents($legacyAnonymousManifest) === '[]') {
-                            unlink($legacyAnonymousManifest);
-                        }
-                        // Older builds wrote [] for every PHP file. Those files
-                        // carry no cache data and can be removed on a cache hit.
-                        if (is_file($anonymousManifest)
-                            && file_get_contents($anonymousManifest) === '[]') {
-                            unlink($anonymousManifest);
-                        }
-                        $shouldRegenerate = $this->shouldRegeneratePhpFile($path);
-                        $hasAnonymousManifest = is_file($anonymousManifest);
-                        $needsAnonymousRefresh = !$shouldRegenerate
-                            && (is_file($legacyAnonymousManifest)
-                                || ($hasAnonymousManifest
-                                    ? !$this->canEmbedAnonymousClassOpcode()
-                                    : (preg_match('/new\s+class\b/', (string) file_get_contents($path)) === 1
-                                        && $this->canEmbedAnonymousClassOpcode())));
-                        if (!$shouldRegenerate && !$needsAnonymousRefresh) {
-                            if ($hasAnonymousManifest) {
-                                $this->restoreAnonymousManifest($path);
-                            }
-                            $validSourceCount++;
-                            if ($this->incrementalTranslationUnitWasEmitted($path)) {
-                                $cppFile = $this->getCppFile($path);
-                                $this->registerGeneratedProjectSource($cppFile);
-                                $sourceFiles[] = $cppFile;
-                                foreach ($this->getSplitTranslationUnits($path) as $part) {
-                                    $this->registerGeneratedProjectSource($part);
-                                    $sourceFiles[] = $part;
-                                }
-                            }
-                            $this->climate->darkGray(
-                                '[cached] ' . $this->getRelativePath($path),
-                            );
-                            continue;
-                        }
-                        $statisticsBefore = $this->compilationStatistics->all();
-                        $this->currentAnonymousFiles = [];
-                        // A dirty dependency means code generation must run;
-                        // it does not mean the generated bytes changed. Keep
-                        // an existing translation unit's timestamp when the
-                        // output is identical, matching CMake/Ninja's restat
-                        // model and preventing needless native recompilation.
-                        $cppFile = $this->convertFile($path);
-                        if ($this->currentAnonymousFiles !== []) {
-                            $this->writeFile($anonymousManifest, json_encode(
-                                array_values(array_unique($this->currentAnonymousFiles)),
-                                JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR,
-                            ));
-                        } elseif (is_file($anonymousManifest)) {
-                            unlink($anonymousManifest);
-                        }
-                        if (is_file($legacyAnonymousManifest)) {
-                            unlink($legacyAnonymousManifest);
-                        }
-                        $this->recordIncrementalConversion(
-                            $path,
-                            $cppFile !== null,
-                            $this->compilationStatistics->delta($statisticsBefore),
-                        );
-                    } elseif (FileScanner::isNativeSourceFile($file)) {
-                        $cppFile = $file;
-                    } else {
-                        continue;
-                    }
-                    $validSourceCount++;
-                    if ($cppFile !== null) {
-                        $sourceFiles[] = $cppFile;
-                        if (FileScanner::isPhpFile($file)) {
-                            foreach ($this->getSplitTranslationUnits($file) as $part) {
-                                $this->registerGeneratedProjectSource($part);
-                                $sourceFiles[] = $part;
-                            }
-                        }
-                    }
-                } catch (Unsupported $e) {
-                    echo ' unsupported syntax: ' . $e->getMessage() . "\n";
-                    echo ' skip: ' . $file . "\n";
-                    if (in_array($file, $this->embeddedPhpFiles, true)
-                        && !in_array($file, $this->embeddedOpcodeFiles, true)) {
-                        $this->embeddedOpcodeFiles[] = $file;
-                    }
-                    unset($files[$k]);
-                }
-            }
-            $this->finalizeIncrementalConversionMetadata($files);
-
-            // A valid PHP input may intentionally emit no standalone translation
-            // unit (for example a compile-time trait or an interface). The shared
-            // extension source still carries its runtime metadata, so only reject
-            // an input set in which no supported source was converted at all.
-            if ($validSourceCount === 0) {
-                $this->stop('No valid source file found');
-            }
-
-            // A WASI library publishes WIT/Component exports rather than a native
-            // TypePHP shared-library ABI, so a PHP import stub would be misleading.
-            if ($this->isBuildModeLib() && !$this->isWasiTarget()) {
-                $this->genLibraryImportStub($files);
-            }
-
-            // Function and data declarations are emitted together, one header
-            // per PHP source, plus a small project-runtime ABI header.
-            $this->genDeclarationHeaders($files);
-            // Large array-valued class constants used to make module_init() one
-            // enormous GCC optimization unit. Emit their request-lifecycle
-            // helpers as independent, cacheable translation units while the
-            // arginfo-backed class registration remains in extension-*.cc.
-            foreach ($this->genClassArrayConstantLifecycleSources() as $lifecycleSource) {
-                $sourceFiles[] = $lifecycleSource;
-            }
-            // Nano keeps the ordinary statically registered Zend class/module
-            // metadata, then adds a direct native process entry beside it.
-            $sourceFiles[] = $this->genExtension();
-            if ($this->isBuildModeEmbed() && !$this->isNanoMode()
-                && ($this->embeddedFiles !== [] || $this->embeddedOpcodeFiles !== [])) {
-                array_push($sourceFiles, ...$this->genEmbeddedOpcodeTable());
-            }
-            if ($this->isNanoMode()) {
-                $sourceFiles[] = $this->genNanoEntrypoint();
-            }
-            $this->getStableIdRegistry()->flush();
-            $this->saveIncrementalCompilationState($files);
-
-            return $sourceFiles;
+            $this->initializeProjectConversion($files);
+            return $this->finalizeProjectConversion($this->convertProjectFiles($files));
         } finally {
             $this->splitTranslationUnitsEnabled = $previousSplitSetting;
             if ($previousPhase !== null) {
@@ -904,5 +781,208 @@ trait SourcePipelineTrait
             }
             $this->compilationStatistics->finish();
         }
+    }
+
+    /** @param list<string> $files */
+    private function initializeProjectConversion(array $files): void
+    {
+        // Persistent IDs must be hydrated before any unchanged translation
+        // unit or declaration header is reused.
+        $this->getStableIdRegistry();
+        // Declaration constants are lowered before bodies so cache IDs are
+        // assigned exclusively in the convert phase.
+        $declarationFiles = $this->getDeclarationInputFiles($files);
+        $this->finalizeDeclarationExpressions($declarationFiles);
+        $this->finalizeRequestArrayDefaultMetadata();
+        $this->initializeDeclarationHeaderFiles($files);
+        $this->restoreCleanIncrementalMetadata($files);
+
+        // Import stubs contribute Zend metadata but have no ordinary PHP body.
+        foreach ($declarationFiles as $file) {
+            if ($this->isStubFile($file) && $this->shouldRegeneratePhpFile($file)) {
+                $this->genStubFile($file);
+            }
+        }
+    }
+
+    /** @param list<string> $files */
+    private function convertProjectFiles(array $files): ProjectConversion
+    {
+        $sourceFiles = [];
+        $validSourceCount = 0;
+        foreach ($files as $key => $file) {
+            try {
+                $generated = $this->convertProjectFile($file);
+                if ($generated === null) {
+                    continue;
+                }
+                ++$validSourceCount;
+                array_push($sourceFiles, ...$generated);
+            } catch (Unsupported $error) {
+                $this->reportUnsupportedProjectFile($file, $error);
+                unset($files[$key]);
+            }
+        }
+        return new ProjectConversion(array_values($files), $sourceFiles, $validSourceCount);
+    }
+
+    /** @return list<string>|null */
+    private function convertProjectFile(string $file): ?array
+    {
+        if (FileScanner::isPhpFile($file)) {
+            return $this->convertPhpProjectFile(realpath($file) ?: $file);
+        }
+        return FileScanner::isNativeSourceFile($file) ? [$file] : null;
+    }
+
+    /** @return list<string> */
+    private function convertPhpProjectFile(string $file): array
+    {
+        $manifest = $this->anonymousManifestPath($file);
+        $legacyManifest = $this->legacyAnonymousManifestPath($file);
+        $this->removeEmptyAnonymousManifest($manifest);
+        $this->removeEmptyAnonymousManifest($legacyManifest);
+
+        $shouldRegenerate = $this->shouldRegeneratePhpFile($file);
+        if (!$shouldRegenerate && !$this->anonymousManifestNeedsRefresh($file, $manifest, $legacyManifest)) {
+            return $this->restoreCachedPhpProjectFile($file, $manifest);
+        }
+        return $this->regeneratePhpProjectFile($file, $manifest, $legacyManifest);
+    }
+
+    private function legacyAnonymousManifestPath(string $file): string
+    {
+        return $this->getBuildDir() . '/anonymous-'
+            . substr(hash('sha256', $file), 0, 20) . '.json';
+    }
+
+    private function removeEmptyAnonymousManifest(string $manifest): void
+    {
+        if (is_file($manifest) && file_get_contents($manifest) === '[]') {
+            unlink($manifest);
+        }
+    }
+
+    private function anonymousManifestNeedsRefresh(
+        string $file,
+        string $manifest,
+        string $legacyManifest,
+    ): bool {
+        if (is_file($legacyManifest)) {
+            return true;
+        }
+        if (is_file($manifest)) {
+            return !$this->canEmbedAnonymousClassOpcode();
+        }
+        return preg_match('/new\s+class\b/', (string) file_get_contents($file)) === 1
+            && $this->canEmbedAnonymousClassOpcode();
+    }
+
+    /** @return list<string> */
+    private function restoreCachedPhpProjectFile(string $file, string $manifest): array
+    {
+        if (is_file($manifest)) {
+            $this->restoreAnonymousManifest($file);
+        }
+        $sourceFiles = [];
+        if ($this->incrementalTranslationUnitWasEmitted($file)) {
+            $cppFile = $this->getCppFile($file);
+            $this->registerGeneratedProjectSource($cppFile);
+            $sourceFiles[] = $cppFile;
+            array_push($sourceFiles, ...$this->getRegisteredSplitTranslationUnits($file));
+        }
+        $this->climate->darkGray('[cached] ' . $this->getRelativePath($file));
+        return $sourceFiles;
+    }
+
+    /** @return list<string> */
+    private function regeneratePhpProjectFile(
+        string $file,
+        string $manifest,
+        string $legacyManifest,
+    ): array {
+        $statisticsBefore = $this->compilationStatistics->all();
+        $this->currentAnonymousFiles = [];
+        // Dirty dependencies require code generation, but byte-identical output
+        // keeps its timestamp so native compilation can still hit its cache.
+        $cppFile = $this->convertFile($file);
+        $this->storeAnonymousManifest($manifest);
+        if (is_file($legacyManifest)) {
+            unlink($legacyManifest);
+        }
+        $this->recordIncrementalConversion(
+            $file,
+            $cppFile !== null,
+            $this->compilationStatistics->delta($statisticsBefore),
+        );
+        if ($cppFile === null) {
+            return [];
+        }
+        return [$cppFile, ...$this->getRegisteredSplitTranslationUnits($file)];
+    }
+
+    private function storeAnonymousManifest(string $manifest): void
+    {
+        if ($this->currentAnonymousFiles === []) {
+            if (is_file($manifest)) {
+                unlink($manifest);
+            }
+            return;
+        }
+        $this->writeFile($manifest, json_encode(
+            array_values(array_unique($this->currentAnonymousFiles)),
+            JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR,
+        ));
+    }
+
+    /** @return list<string> */
+    private function getRegisteredSplitTranslationUnits(string $file): array
+    {
+        $parts = $this->getSplitTranslationUnits($file);
+        foreach ($parts as $part) {
+            $this->registerGeneratedProjectSource($part);
+        }
+        return $parts;
+    }
+
+    private function reportUnsupportedProjectFile(string $file, Unsupported $error): void
+    {
+        echo ' unsupported syntax: ' . $error->getMessage() . "\n";
+        echo ' skip: ' . $file . "\n";
+        if (in_array($file, $this->embeddedPhpFiles, true)
+            && !in_array($file, $this->embeddedOpcodeFiles, true)) {
+            $this->embeddedOpcodeFiles[] = $file;
+        }
+    }
+
+    /** @return list<string> */
+    private function finalizeProjectConversion(ProjectConversion $conversion): array
+    {
+        $files = $conversion->files();
+        $this->finalizeIncrementalConversionMetadata($files);
+        // Trait and interface inputs may emit no standalone translation unit,
+        // but at least one supported input must participate in the project.
+        if (!$conversion->hasValidSources()) {
+            $this->stop('No valid source file found');
+        }
+
+        if ($this->isBuildModeLib() && !$this->isWasiTarget()) {
+            $this->genLibraryImportStub($files);
+        }
+        $this->genDeclarationHeaders($files);
+
+        $sourceFiles = $conversion->sourceFiles();
+        array_push($sourceFiles, ...$this->genClassArrayConstantLifecycleSources());
+        $sourceFiles[] = $this->genExtension();
+        if ($this->isBuildModeEmbed() && !$this->isNanoMode()
+            && ($this->embeddedFiles !== [] || $this->embeddedOpcodeFiles !== [])) {
+            array_push($sourceFiles, ...$this->genEmbeddedOpcodeTable());
+        }
+        if ($this->isNanoMode()) {
+            $sourceFiles[] = $this->genNanoEntrypoint();
+        }
+        $this->getStableIdRegistry()->flush();
+        $this->saveIncrementalCompilationState($files);
+        return $sourceFiles;
     }
 }

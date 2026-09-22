@@ -2292,56 +2292,79 @@ CODE;
 
     public function compile(array $sourceFiles): array
     {
-        $job = $this->maxJob;
+        $sourceFiles = $this->prepareNativeSourceFiles($sourceFiles);
+        $this->prepareNativeCompilationEnvironment();
+        return $this->dispatchNativeCompilation($sourceFiles);
+    }
 
+    /** @param list<string> $sourceFiles @return list<string> */
+    private function prepareNativeSourceFiles(array $sourceFiles): array
+    {
         if ($this->isNanoMode()) {
-            $sourceFiles = $this->composeNanoRuntimeSources($sourceFiles);
-        // The embed build needs the main function and the CLI's built-in function definitions.
-        } elseif ($this->isBuildModeEmbed()) {
-            $runtimeSource = $this->getPhpxDir() . '/src/misc/typephp_runtime.cc';
-            // PHPX 2.6.3 keeps the common runtime in typephp_main.cc. Newer
-            // PHPX versions split it out so the object can be shared across
-            // projects. Keep the old layout buildable during release rollout.
-            if (is_file($runtimeSource)) {
-                $sourceFiles[] = $runtimeSource;
-            }
-            $sourceFiles[] = $this->getPhpxDir() . '/src/misc/typephp_main.cc';
-            if ($this->embeddedFiles !== [] || $this->embeddedOpcodeFiles !== []) {
-                $sourceFiles[] = $this->getPhpxDir() . '/src/misc/typephp_opcode_table.cc';
-                // Select the decoder for the PHP CLI that generated the blobs.
-                // Distribution PHP headers need not live under the PHP prefix.
-                $this->getOpcodeBuildExtensionArgs();
-                if (!preg_match('/^8\.(4|5)\./', $this->opcodeBuildPhpVersion, $versionMatch)) {
-                    throw new \RuntimeException(
-                        "Unsupported opcode decoder PHP version: {$this->opcodeBuildPhpVersion}",
-                    );
-                }
-                $decoder = 'opcode_unserialize_8' . $versionMatch[1] . '.c';
-                $sourceFiles[] = $this->getPhpxDir() . '/thirdparty/opcache/' . $decoder;
-            }
+            return $this->composeNanoRuntimeSources($sourceFiles);
+        }
+        if ($this->isBuildModeEmbed()) {
+            array_push($sourceFiles, ...$this->getEmbeddedRuntimeSources());
         }
 
-        if (!$this->isNanoMode()
-            && $this->isBuildModeBin()
+        if ($this->isBuildModeBin()
             && !$this->isWasiTarget()
             && !$this->isIosTarget()) {
             $sourceFiles[] = $this->getPhpxDir() . '/src/misc/php_cli_process_title.c';
             $sourceFiles[] = $this->getPhpxDir() . '/src/misc/ps_title.c';
         }
+        return $sourceFiles;
+    }
 
+    /** @return list<string> */
+    private function getEmbeddedRuntimeSources(): array
+    {
+        $sources = [];
+        $runtimeSource = $this->getPhpxDir() . '/src/misc/typephp_runtime.cc';
+        // PHPX 2.6.3 keeps the common runtime in typephp_main.cc. Newer PHPX
+        // versions split it out so the object can be shared across projects.
+        if (is_file($runtimeSource)) {
+            $sources[] = $runtimeSource;
+        }
+        $sources[] = $this->getPhpxDir() . '/src/misc/typephp_main.cc';
+        if ($this->embeddedFiles !== [] || $this->embeddedOpcodeFiles !== []) {
+            $sources[] = $this->getPhpxDir() . '/src/misc/typephp_opcode_table.cc';
+            $sources[] = $this->getEmbeddedOpcodeDecoderSource();
+        }
+        return $sources;
+    }
+
+    private function getEmbeddedOpcodeDecoderSource(): string
+    {
+        // Select the decoder for the PHP CLI that generated the blobs.
+        // Distribution PHP headers need not live under the PHP prefix.
+        $this->getOpcodeBuildExtensionArgs();
+        if (!preg_match('/^8\.(4|5)\./', $this->opcodeBuildPhpVersion, $versionMatch)) {
+            throw new \RuntimeException(
+                "Unsupported opcode decoder PHP version: {$this->opcodeBuildPhpVersion}",
+            );
+        }
+        return $this->getPhpxDir() . '/thirdparty/opcache/opcode_unserialize_8'
+            . $versionMatch[1] . '.c';
+    }
+
+    private function prepareNativeCompilationEnvironment(): void
+    {
         if (!$this->isNanoMode()) {
             $this->preparePhpXPrecompiledHeader();
         }
-
-        // Windows: compile the resource file (icon, version info, etc.)
         $this->compileResourceFile();
+    }
 
-        if ($job <= 1) {
+    /** @param list<string> $sourceFiles @return list<string> */
+    private function dispatchNativeCompilation(array $sourceFiles): array
+    {
+        if ($this->maxJob <= 1) {
             return $this->compileSourceFile($sourceFiles);
         }
 
         if (function_exists('proc_open') && function_exists('proc_get_status')) {
-            return $this->compileWithProcessPool($sourceFiles, $job);
+            return $this->compileWithProcessPool($sourceFiles, $this->maxJob);
         }
 
         $this->climate->warning(
