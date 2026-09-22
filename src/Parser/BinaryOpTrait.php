@@ -759,6 +759,13 @@ trait BinaryOpTrait
                     return $def->type;
                 }
             }
+            $def = $this->getNativePropertyDef($expr);
+            if ($def !== null
+                && in_array($def->type, [Type::INT, Type::FLOAT, Type::BOOL], true)
+                && $this->isNativePropertyTypedValue($expr)
+            ) {
+                return $def->type;
+            }
             return Type::VAR;
         }
 

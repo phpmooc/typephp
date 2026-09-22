@@ -7900,7 +7900,10 @@ CODE;
                             "Cannot override final property {$parentClass}::\${$name}"
                         );
                     }
-                    if ($childProp->type !== $parentProp->type || $childProp->class !== $parentProp->class) {
+                    if ($childProp->type !== $parentProp->type
+                        || $childProp->class !== $parentProp->class
+                        || $childProp->nativeStorageType !== $parentProp->nativeStorageType
+                    ) {
                         $this->fatalError($classStmt,
                             "Declaration of `{$className}::\${$name}` must be compatible " .
                             "with `{$parentClass}::\${$name}`");

@@ -57,6 +57,10 @@ final class NativeObjectStackPromotionCodegenTest extends TestCase
             'virtual ~php_nativestackpromotionchild() noexcept override;',
             $header,
         );
+        self::assertStringContainsString('int32_t number = 0;', $header);
+        self::assertStringContainsString('int8_t tag = 0;', $header);
+        self::assertStringContainsString('uint16_t flags = 0;', $header);
+        self::assertStringContainsString('float ratio = 0;', $header);
         self::assertStringContainsString(
             'virtual php::Int __typephp_virtual_php_nativestackpromotionbase__readfrombase() override;',
             $header,

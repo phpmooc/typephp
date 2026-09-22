@@ -140,6 +140,15 @@ final class NativeClassValidationTest extends \BaseTest
         $this->compile('native-class-static-property.php');
     }
 
+    public function testRejectsUint64Property(): void
+    {
+        $this->expectException(\TypePhp\Exception\SyntaxError::class);
+        $this->expectExceptionMessage(
+            'Native property type `uint64` is not supported because it cannot be represented by php::Int',
+        );
+        $this->compile('native-class-uint64-property.php');
+    }
+
     public function testRejectsInheritanceAcrossObjectModels(): void
     {
         $this->expectException(TestError::class);

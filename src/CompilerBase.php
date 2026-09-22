@@ -3768,7 +3768,11 @@ class CompilerBase implements PropertyAccessContext
         if ($this->isVarExpr($expr->var) && !$this->hasVar($var)) {
             $this->errorUndefinedVariable($expr->var);
         }
-        return '++' . $var;
+        $result = '++' . $var;
+        $property = $this->getNativePropertyDef($expr->var);
+        return $property === null
+            ? $result
+            : $this->promoteNativeObjectPropertyValue($property, $result);
     }
 
     /**
@@ -4184,7 +4188,11 @@ class CompilerBase implements PropertyAccessContext
                 $opName = $op === '+' ? '++' : '--';
                 $this->fatalError($expr, "Cannot use {$opName} on {$type}. Use " . ($op === '+' ? '+= 1' : '-= 1') . ' instead (Big* types are immutable).');
             }
-            return $var . str_repeat($op, 2);
+            $result = $var . str_repeat($op, 2);
+            $property = $this->getNativePropertyDef($expr->var);
+            return $property === null
+                ? $result
+                : $this->promoteNativeObjectPropertyValue($property, $result);
         }
         if ($this->isStaticPropertyFetch($expr->var)) {
             $native = $this->parseNativeStaticPropertyFetch($expr->var);
@@ -4237,7 +4245,11 @@ class CompilerBase implements PropertyAccessContext
         if ($this->isVarExpr($expr->var) && !$this->hasVar($var)) {
             $this->errorUndefinedVariable($expr->var);
         }
-        return '--' . $var;
+        $result = '--' . $var;
+        $property = $this->getNativePropertyDef($expr->var);
+        return $property === null
+            ? $result
+            : $this->promoteNativeObjectPropertyValue($property, $result);
     }
 
     protected function parsePrint(Expr\Print_ $expr): string

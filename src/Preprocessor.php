@@ -22,6 +22,7 @@ use TypePhp\Exception\SyntaxError;
 use TypePhp\Transform\PropertyHookLowering;
 use TypePhp\Transform\CompileTimeAttribute;
 use TypePhp\Transform\NativeClassAttributeLowering;
+use TypePhp\Transform\NativePropertyTypeLowering;
 use TypePhp\Transform\NanoSyntaxValidationVisitor;
 use TypePhp\Transform\PrinterLowering;
 use TypePhp\Transform\ArrayableLowering;
@@ -2439,6 +2440,7 @@ class Preprocessor extends CompilerBase
             false,
         );
         $propDef->node = $errorNode;
+        $propDef->nativeStorageType = NativePropertyTypeLowering::getStorageType($errorNode);
         if ($typeNode !== null
             && !$typeNode instanceof NullableType
             && !$typeNode instanceof UnionType

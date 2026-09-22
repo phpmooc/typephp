@@ -1204,6 +1204,7 @@ trait NativeClassSupportTrait
         $definition = $resolution->propertyDef;
 
         if ($definition->nullable
+            || $definition->nativeStorageType !== ''
             || $definition->getter !== null
             || $definition->setter !== null
             || Type::getReferenceType($definition->type) !== $referenceType
@@ -1871,6 +1872,9 @@ trait NativeClassSupportTrait
 
     protected function getNativeObjectPropertyType(PropertyDef $property): string
     {
+        if ($property->nativeStorageType !== '') {
+            return $property->nativeStorageType;
+        }
         if ($property->type === Type::OBJECT && $this->isNativeObjectClass($property->class)) {
             return $this->getNativeObjectPointerType($property->class);
         }
@@ -1882,6 +1886,14 @@ trait NativeClassSupportTrait
             Type::STREAM, Type::BOX, Type::BIGINT, Type::BIGFLOAT, Type::DECIMAL => Type::VAR,
             default => $property->type,
         };
+    }
+
+    protected function promoteNativeObjectPropertyValue(PropertyDef $property, string $expression): string
+    {
+        if ($property->nativeStorageType === '') {
+            return $expression;
+        }
+        return 'static_cast<' . $property->type . '>(' . $expression . ')';
     }
 
     protected function getNativeObjectInitializerName(string|ClassDef $class): string
