@@ -5,6 +5,7 @@ use TypePhp\Build\WasiProjectConfig;
 use TypePhp\Build\PhpxLocator;
 use TypePhp\Build\NativeSourceProjectBuilder;
 use TypePhp\Build\NativeSourceProjectConfig;
+use TypePhp\Build\ProjectBuildRunner;
 use TypePhp\PythonTools\Command as PythonToolsCommand;
 use TypePhp\Cli\CompletionCommand;
 
@@ -72,67 +73,7 @@ function main(int $argc, array $argv): void
         return;
     }
 
-    $translator = Translator::getInstance();
-    $translator->setIndent('    ');
-    // Scan all PHP files and preprocess them.
-    $files = $translator->prepare($translator->parseArgv($argv));
-    // Generate the C++ source files.
-    $sourceFiles = $translator->convert($files);
-
-    $wasmManifest = getenv('TYPEPHP_WASM_INTERFACE_MANIFEST');
-    if (is_string($wasmManifest) && $wasmManifest !== '') {
-        $wasmWit = getenv('TYPEPHP_WASM_INTERFACE_WIT');
-        $wasmAdapter = getenv('TYPEPHP_WASM_INTERFACE_ADAPTER');
-        $wasmAsyncExports = getenv('TYPEPHP_WASM_INTERFACE_ASYNC_EXPORTS');
-        $wasmPackage = getenv('TYPEPHP_WASM_PACKAGE');
-        $wasmWorld = getenv('TYPEPHP_WASM_WORLD');
-        if (!is_string($wasmWit) || $wasmWit === ''
-            || !is_string($wasmAdapter) || $wasmAdapter === ''
-            || !is_string($wasmAsyncExports) || $wasmAsyncExports === ''
-            || !is_string($wasmPackage) || $wasmPackage === ''
-            || !is_string($wasmWorld) || $wasmWorld === '') {
-            throw new RuntimeException('Incomplete internal WASM interface configuration');
-        }
-        $translator->writeWasmInterface(
-            $wasmManifest,
-            $wasmWit,
-            $wasmAdapter,
-            $wasmAsyncExports,
-            $wasmPackage,
-            $wasmWorld,
-        );
-        $sourceFiles[] = $wasmAdapter;
-    }
-
-    // --dry mode: only generate the C++ code, without compiling.
-    if ($translator->isDryRun()) {
-        $buildDir = $translator->getBuildDir();
-        $count = count($sourceFiles);
-        $sourceListFile = getenv('TYPEPHP_GENERATED_SOURCE_LIST');
-        if (is_string($sourceListFile) && $sourceListFile !== '') {
-            $sourceListDir = dirname($sourceListFile);
-            if (!is_dir($sourceListDir) && !mkdir($sourceListDir, 0777, true) && !is_dir($sourceListDir)) {
-                throw new RuntimeException("Unable to create generated source manifest directory: {$sourceListDir}");
-            }
-            if (file_put_contents($sourceListFile, implode(PHP_EOL, $sourceFiles) . PHP_EOL) === false) {
-                throw new RuntimeException("Unable to write generated source manifest: {$sourceListFile}");
-            }
-        }
-        $translator->output("Dry run completed: {$count} C++ source file(s) generated in {$buildDir}", 'lightBlue');
-        return;
-    }
-
-    // Compile all C++ source files.
-    $objectFiles = [
-        ...$translator->compile($sourceFiles),
-        ...$translator->getProjectObjectFiles(),
-    ];
-    // Link all object files to produce the executable.
-    $binaryFile = $translator->build($objectFiles);
-    // If --run / -r was specified, execute immediately after compilation.
-    if ($translator->isRunRequested()) {
-        $translator->run($binaryFile); // never returns
-    }
+    (new ProjectBuildRunner(Translator::getInstance()))->run($argv);
 }
 
 function shouldCompileNativeSourceProject(array $argv): bool
@@ -321,9 +262,6 @@ function compileWasmProgram(array $argv): void
     }
 
     $environment = getenv();
-    if (!is_array($environment)) {
-        $environment = [];
-    }
     $environment['TYPEPHP_WASI_CC'] = $tools['clang'];
     $environment['TYPEPHP_WASI_CXX'] = $tools['clang++'];
     $environment['TYPEPHP_WASI_AR'] = $tools['llvm-ar'];
