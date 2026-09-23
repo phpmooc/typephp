@@ -390,7 +390,7 @@ jobs:
           }
 
       - name: Package tested Windows compiler
-        if: startsWith(github.ref, 'refs/tags/') && matrix.php == '8.5'
+        if: startsWith(github.ref, 'refs/tags/')
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -415,17 +415,17 @@ jobs:
               throw "Windows packaging failed with exit code $LASTEXITCODE"
           }
 
-          $packages = @(Get-ChildItem 'tpc_v*_windows_*.zip' -File)
+          $packages = @(Get-ChildItem 'tpc_v*_windows_x64_php${{ matrix.php }}.*-zts.zip' -File)
           if ($packages.Count -ne 1) {
               throw "Expected one Windows release package, found $($packages.Count)"
           }
 
       - name: Verify portable Windows PHP configuration
-        if: startsWith(github.ref, 'refs/tags/') && matrix.php == '8.5'
+        if: startsWith(github.ref, 'refs/tags/')
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $package = Get-ChildItem 'tpc_v*_windows_*.zip' -File | Select-Object -First 1
+          $package = Get-ChildItem 'tpc_v*_windows_x64_php${{ matrix.php }}.*-zts.zip' -File | Select-Object -First 1
           $destination = Join-Path $env:RUNNER_TEMP ('typephp-release-check-' + [guid]::NewGuid())
           Expand-Archive -LiteralPath $package.FullName -DestinationPath $destination
           $roots = @(Get-ChildItem $destination -Directory)
@@ -433,6 +433,9 @@ jobs:
               throw "Expected one release package directory, found $($roots.Count)"
           }
           $root = $roots[0].FullName
+          if (Test-Path (Join-Path $root 'vendor')) {
+              throw 'Release package must not contain a vendor directory'
+          }
           $phpExe = Join-Path $root 'php.exe'
           $compilerExe = Join-Path $root 'tpc.exe'
           $phpIni = Join-Path $root 'php.ini'
@@ -476,13 +479,13 @@ jobs:
           }
 
       - name: Upload Windows release package
-        if: startsWith(github.ref, 'refs/tags/') && matrix.php == '8.5'
+        if: startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-artifact@v4
         with:
           name: release-windows-x64-php-${{ matrix.php }}-zts
           if-no-files-found: error
           retention-days: 1
-          path: tpc_v*_windows_*.zip
+          path: tpc_v*_windows_x64_php${{ matrix.php }}.*-zts.zip
 
       - name: Upload Windows build outputs
         if: always()

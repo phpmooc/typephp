@@ -509,7 +509,7 @@ jobs:
           path: build/phpt-metrics
 
       - name: Package tested Linux compiler
-        if: startsWith(github.ref, 'refs/tags/') && matrix.php == '8.5'
+        if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
           composer install --no-dev --prefer-dist --no-progress --classmap-authoritative
@@ -518,16 +518,16 @@ jobs:
           ./tpc --version
           export TYPEPHP_PACKAGE_VERSION="${GITHUB_REF_NAME}"
           php package.php
-          test "$(find . -maxdepth 1 -name 'tpc_v*_linux_*.tar.gz' -type f | wc -l)" -eq 1
+          test "$(find . -maxdepth 1 -name 'tpc_v*_linux_x64_php${{ matrix.php }}.*-zts.tar.gz' -type f | wc -l)" -eq 1
 
       - name: Upload Linux release package
-        if: startsWith(github.ref, 'refs/tags/') && matrix.php == '8.5'
+        if: startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-artifact@v4
         with:
           name: release-linux-x64-php-${{ matrix.php }}-zts
           if-no-files-found: error
           retention-days: 1
-          path: tpc_v*_linux_*.tar.gz
+          path: tpc_v*_linux_x64_php${{ matrix.php }}.*-zts.tar.gz
 
       - name: Upload PHPT failure artifacts
         if: failure()

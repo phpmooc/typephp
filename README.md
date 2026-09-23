@@ -170,11 +170,15 @@ in TypePHP while keeping only a thin platform-native UI bridge. See the
 [Android native app example](examples/android-native/) and the
 [iOS/macOS native app example](examples/apple-native/).
 
-Native release assets are built with the latest PHP 8.5 ZTS release. TypePHP
-publishes Linux x64, Linux ARM64, macOS ARM64, and Windows x64 packages. Native
-NTS and 32-bit x86 packages are not provided. Linux and macOS archives contain
-the compiler and production Composer dependencies, while the Windows archive
-contains the complete matching PHP/PHPX runtime and SDK.
+Linux, macOS, and Windows release assets are built separately with the latest
+PHP 8.4 ZTS and PHP 8.5 ZTS releases; each filename identifies the complete
+build PHP version and ZTS ABI. Linux and macOS users must select the build that
+matches the host PHP. Each Windows x64 archive includes its matching PHP/PHPX
+runtime and SDK, so users can directly choose the bundled PHP version they want.
+Native NTS and 32-bit x86 packages are not provided. Linux and macOS archives
+contain only the compiler, English and Chinese READMEs, and the license;
+production Composer dependencies are embedded in `tpc`. Windows archives also
+omit a separate `vendor` directory.
 
 ## Installation
 
@@ -395,6 +399,9 @@ entries so Zend can reject loading when a required PHP extension is missing.
 `version` provides the Zend module version. The `info` mapping accepts arbitrary
 labels and values for the module's dedicated `phpinfo()` section.
 `embedded-files` accepts files or directories with the same conditional syntax.
+For development/release configurations, Composer autoload setup, build
+requirements, cache behavior, and troubleshooting, see
+[Embedding PHP dependencies in an executable](docs/en/EMBEDDED_FILES.md).
 It is opt-in for embedded binary builds: all listed files are packed into the
 binary, and PHP files not successfully compiled from `sources` are stored as
 OPcache bytecode. `.stub.php` API declaration files remain in the raw bundle
@@ -853,6 +860,7 @@ rules and a PHPT whenever runtime output or diagnostics are observable.
 ## Documentation
 
 - [Quick Start](docs/en/QUICKSTART.md) — minimal compilation flow
+- [Embedded PHP dependencies](docs/en/EMBEDDED_FILES.md) — package Composer vendor and runtime resources in an executable
 - [Change log](CHANGELOG.md) — breaking changes and pre-1.0 upgrade notes
 - [Compilation modes](docs/en/COMPILATION_MODES.md) — `bin`, `ext`, `lib`
 - [Compiler CLI](docs/en/COMPILER_CLI.md) — CLI arguments and project config

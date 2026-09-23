@@ -150,10 +150,12 @@ Android `arm64-v8a`、iPhoneOS `arm64` 和 WASI 后端；具体主机能否构�
 [Android 原生应用示例](examples/android-native/)和
 [iOS/macOS 原生应用示例](examples/apple-native/)。
 
-原生 Release Assets 默认使用 PHP 8.5 ZTS 的最新版本构建，提供 Linux x64、Linux
-ARM64、macOS ARM64 和 Windows x64 四个平台包；不提供原生 NTS 或 32 位 x86 包。
-Linux 与 macOS 包包含编译器和 production Composer 依赖，Windows 包则包含完整且
-匹配的 PHP/PHPX 运行时与 SDK。
+Linux、macOS 和 Windows Release Assets 分别使用最新的 PHP 8.4 ZTS 和 PHP 8.5
+ZTS 构建，文件名包含构建使用的完整 PHP 版本与 ZTS ABI。Linux 与 macOS 用户必须
+选择与宿主机 PHP 匹配的版本；Windows x64 发布包已包含匹配的 PHP/PHPX 运行时与
+SDK，用户可直接选择希望使用的内置 PHP 版本。不提供原生 NTS 或 32 位 x86 包。
+Linux 与 macOS 包只包含编译器、中英文 README 和 LICENSE，production Composer
+依赖已嵌入 `tpc`；Windows 包同样不再携带独立的 `vendor` 目录。
 
 ## 安装
 
@@ -359,6 +361,8 @@ embedded-files:
 `version` 用于设置 Zend 模块版本。`info` 映射可配置任意标签和值，并显示在模块
 独立的 `phpinfo()` 区块中。
 `embedded-files` 支持与 `sources` 相同的文件、目录及条件写法，仅在显式配置时启用。
+完整的开发/发布配置、Composer autoload 接入、构建依赖、缓存规则和排错方法见
+[将 PHP 依赖嵌入可执行文件](docs/zh-cn/EMBEDDED_FILES.md)。
 所列文件全部打包进二进制；未通过 `sources` 成功原生编译的 PHP 文件由 OPcache
 生成字节码。用于 API 声明的 `.stub.php` 文件仍保留在原始文件包中，不生成可执行字节码。
 其他无法由 OPcache 编译的内嵌 PHP 文件会输出跳过日志，原始文件仍保留，但不进入
@@ -780,6 +784,7 @@ GitHub Actions 会在 PHP 8.4 和 8.5 上分别运行 PHPUnit 与自举 PHPT。�
 ## 文档
 
 - [快速入门](docs/zh-cn/QUICKSTART.md) —— 最小编译流程
+- [内嵌 PHP 依赖](docs/zh-cn/EMBEDDED_FILES.md) —— 将 Composer vendor 和运行时资源打包进可执行文件
 - [变更记录](CHANGELOG.md) —— 破坏性变更与 1.0 前升级说明
 - [编译模式](docs/zh-cn/COMPILATION_MODES.md) —— `bin`、`ext`、`lib`
 - [编译器命令行](docs/zh-cn/COMPILER_CLI.md) —— CLI 参数与项目配置

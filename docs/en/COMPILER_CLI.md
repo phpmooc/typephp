@@ -187,6 +187,22 @@ extension-dependencies:
 
 The compiler generates a `ZEND_MOD_REQUIRED` for each entry. Zend checks whether these extensions are loaded when loading the TypePHP module. This setting does not represent native link libraries; C/C++ link dependencies still use `link-libs`.
 
+### Embedded PHP dependencies and resources
+
+A release `mode: bin` project can package Composer vendor files, PHP fallback
+files, and read-only resources through `embedded-files`:
+
+```yaml
+embedded-files:
+  - vendor
+  - resources
+```
+
+The build needs matching PHP CLI and OPcache installations. The runtime does
+not need PHP CLI, OPcache, Composer installation, or a disk vendor tree. See
+[Embedding PHP Dependencies in an Executable](EMBEDDED_FILES.md) for the full
+workflow and limitations.
+
 ## Viewing the Authoritative Help
 
 The command-line implementation may continue to evolve; for released versions the actual arguments are determined by the following command:

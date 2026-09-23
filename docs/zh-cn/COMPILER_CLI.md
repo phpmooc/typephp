@@ -182,6 +182,21 @@ extension-dependencies:
 
 编译器会为每一项生成 `ZEND_MOD_REQUIRED`。Zend 在加载 TypePHP 模块时检查这些扩展是否已加载。该配置不表示原生链接库；C/C++ 链接依赖仍使用 `link-libs`。
 
+### 内嵌 PHP 依赖和资源
+
+发布用的 `mode: bin` 项目可以通过 `embedded-files` 将 Composer vendor、PHP
+fallback 文件和只读资源打包进可执行文件：
+
+```yaml
+embedded-files:
+  - vendor
+  - resources
+```
+
+构建时需要匹配的 PHP CLI 和 OPcache；运行时不需要 PHP CLI、OPcache、Composer
+安装或磁盘 vendor。完整用法和限制见
+[将 PHP 依赖嵌入可执行文件](EMBEDDED_FILES.md)。
+
 ## 查看权威帮助
 
 命令行实现可能继续演进，发布版本的实际参数以以下命令为准：
