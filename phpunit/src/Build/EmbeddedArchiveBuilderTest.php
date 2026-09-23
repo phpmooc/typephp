@@ -94,6 +94,12 @@ final class EmbeddedArchiveBuilderTest extends TestCase
             $unix,
         );
         self::assertStringNotContainsString('typephp_opcode_table_install(void) {}', $unix);
+
+        $sapi = $renderer->render($archive, '8.4.14', false, false, '/app/index.php');
+        self::assertStringContainsString(
+            'typephp_project_entry_file(void) { return "/app/index.php"; }',
+            $sapi,
+        );
     }
 
     private function write(string $name, string $contents): string

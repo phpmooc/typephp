@@ -187,9 +187,14 @@ class Constants
         'mode' => [
             'longPrefix' => 'mode',
             'prefix' => 'm',
-            'description' => 'Build mode, -m bin(binary), -m lib(shared library), or -m ext(PHP extension), default: bin',
+            'description' => 'Build mode: bin, lib, ext, or sapi; default: bin',
             'required' => false,
             'defaultValue' => CompilerBase::BUILD_MODE_BIN,
+        ],
+        'sapi' => [
+            'longPrefix' => 'sapi',
+            'description' => 'Build a self-contained PHP application SAPI: cli, fpm, or both',
+            'required' => false,
         ],
         'run' => [
             'prefix' => 'r',

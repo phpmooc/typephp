@@ -138,6 +138,32 @@ final class PhpBuildConfigurationTest extends TestCase
         self::assertContains('--enable-mbstring', $options);
     }
 
+    public function testSapiDerivationBuildsStaticCliAndSelectedFpm(): void
+    {
+        $options = PhpBuildConfiguration::deriveSapi(
+            [
+                '--prefix=/usr',
+                '--enable-embed=shared',
+                '--enable-opcache=shared',
+                '--with-curl=shared',
+                '--enable-mbstring',
+                '--with-pear',
+            ],
+            '/tmp/typephp-sapi',
+            ['cli', 'fpm'],
+        );
+
+        self::assertContains('--prefix=/tmp/typephp-sapi', $options);
+        self::assertContains('--enable-cli', $options);
+        self::assertContains('--enable-fpm', $options);
+        self::assertContains('--enable-opcache', $options);
+        self::assertContains('--with-curl', $options);
+        self::assertContains('--without-pear', $options);
+        self::assertNotContains('--enable-embed=shared', $options);
+        self::assertNotContains('--enable-opcache=shared', $options);
+        self::assertNotContains('--with-curl=shared', $options);
+    }
+
     public function testParseShellWordsRejectsIncompleteInput(): void
     {
         $this->expectException(\InvalidArgumentException::class);

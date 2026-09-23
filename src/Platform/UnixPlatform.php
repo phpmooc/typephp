@@ -224,15 +224,17 @@ abstract class UnixPlatform extends PlatformBase
     /**
      * Build the PHP include paths (obtained dynamically via php-config).
      */
-    public function buildPhpIncludePaths(string $phpDir): array
+    public function buildPhpIncludePaths(string $phpDir, bool $allowTargetVersion = false): array
     {
-        $key = $this->getPhpSdkCacheKey($phpDir);
-        return $this->phpIncludeCache[$key] ??= $this->resolvePhpIncludePaths($phpDir);
+        $key = $this->getPhpSdkCacheKey($phpDir) . ($allowTargetVersion ? ':target' : ':host');
+        return $this->phpIncludeCache[$key] ??= $this->resolvePhpIncludePaths($phpDir, $allowTargetVersion);
     }
 
-    private function resolvePhpIncludePaths(string $phpDir): array
+    private function resolvePhpIncludePaths(string $phpDir, bool $allowTargetVersion): array
     {
-        $phpConfigPath = $this->findPhpConfig($phpDir);
+        $phpConfigPath = $allowTargetVersion
+            ? $this->findTargetPhpConfig($phpDir)
+            : $this->findPhpConfig($phpDir);
         if ($phpConfigPath) {
             $includes = shell_exec(escapeshellarg($phpConfigPath) . ' --includes 2>/dev/null');
             if ($includes) {
@@ -265,6 +267,15 @@ abstract class UnixPlatform extends PlatformBase
         }
 
         return $includePaths;
+    }
+
+    private function findTargetPhpConfig(string $phpDir): ?string
+    {
+        $candidate = rtrim($phpDir, '/') . '/bin/php-config';
+        if (!is_executable($candidate)) {
+            throw new \RuntimeException("Target PHP does not provide an executable bin/php-config: {$phpDir}");
+        }
+        return $candidate;
     }
 
     /**

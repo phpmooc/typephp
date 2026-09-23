@@ -57,10 +57,10 @@ class Macos extends UnixPlatform
      * Add the standard Apple Silicon and Intel Homebrew prefixes after the
      * selected PHP installation's include paths.
      */
-    public function buildPhpIncludePaths(string $phpDir): array
+    public function buildPhpIncludePaths(string $phpDir, bool $allowTargetVersion = false): array
     {
         return array_values(array_unique(array_merge(
-            parent::buildPhpIncludePaths($phpDir),
+            parent::buildPhpIncludePaths($phpDir, $allowTargetVersion),
             self::HOMEBREW_INCLUDE_PATHS,
         )));
     }

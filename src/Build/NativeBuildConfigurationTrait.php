@@ -177,8 +177,20 @@ trait NativeBuildConfigurationTrait
             $includePaths = array_merge($includePaths, $phpSdkPaths);
         } else {
             // Linux/macOS
-            $phpPaths = $platform->buildPhpIncludePaths($this->getPhpDir());
+            $phpPaths = $platform->buildPhpIncludePaths($this->getPhpDir(), $this->isSapiBuild());
             $includePaths = array_merge($includePaths, $phpPaths);
+            if ($this->isSapiBuild() && $this->sapiPhpBuildDirectory !== null) {
+                $makefile = $this->sapiPhpBuildDirectory . '/Makefile';
+                $contents = is_file($makefile) ? (string) file_get_contents($makefile) : '';
+                if (preg_match('/^INCLUDES[ \t]*=[ \t]*(.*)$/m', $contents, $match) === 1) {
+                    preg_match_all('/(?:^|\s)-I([^\s]+)/', $match[1], $paths);
+                    foreach ($paths[1] ?? [] as $path) {
+                        if (is_dir($path)) {
+                            $includePaths[] = $path;
+                        }
+                    }
+                }
+            }
             // Bundled mpdecimal header directories
             $includePaths[] = $this->getPhpxDir() . '/thirdparty/mpdecimal/libmpdec';
             $includePaths[] = $this->getPhpxDir() . '/thirdparty/mpdecimal/libmpdec++';

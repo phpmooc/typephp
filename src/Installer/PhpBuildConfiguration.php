@@ -150,4 +150,54 @@ final class PhpBuildConfiguration
             ...$result,
         ];
     }
+
+    /**
+     * Build a private CLI/FPM runtime from php-src. Every PHP extension remains
+     * static so the resulting executables never load host extension binaries.
+     *
+     * @param string|list<string> $configureOptions
+     * @param list<string> $targets
+     * @return list<string>
+     */
+    public static function deriveSapi(string|array $configureOptions, string $prefix, array $targets): array
+    {
+        $replace = [
+            '--prefix', '--with-config-file-path', '--with-config-file-scan-dir',
+            '--enable-cli', '--disable-cli', '--enable-fpm', '--disable-fpm',
+            '--enable-cgi', '--disable-cgi', '--enable-phpdbg', '--disable-phpdbg',
+            '--enable-embed', '--disable-embed', '--enable-opcache', '--disable-opcache',
+            '--with-pear', '--without-pear',
+        ];
+        $drop = ['--with-apxs', '--with-apxs2', '--with-fpm-systemd', ...self::PREFIX_DERIVED];
+        $result = [];
+        $options = is_string($configureOptions) ? self::parseShellWords($configureOptions) : $configureOptions;
+        foreach ($options as $option) {
+            if (!str_starts_with($option, '--')) {
+                continue;
+            }
+            $name = explode('=', $option, 2)[0];
+            if (in_array($name, $replace, true) || in_array($name, $drop, true)) {
+                continue;
+            }
+            // A private SAPI cannot depend on extension .so files. Configure's
+            // --enable-x=shared and --with-x=shared forms both accept the same
+            // option without the shared value to select static compilation.
+            $option = preg_replace('/=shared(?:,.*)?$/', '', $option) ?? $option;
+            $result[] = $option;
+        }
+
+        return array_values(array_unique([
+            '--prefix=' . $prefix,
+            '--with-config-file-path=' . $prefix . '/lib',
+            '--with-config-file-scan-dir=' . $prefix . '/lib/conf.d',
+            '--enable-cli',
+            in_array('fpm', $targets, true) ? '--enable-fpm' : '--disable-fpm',
+            '--disable-cgi',
+            '--disable-phpdbg',
+            '--disable-embed',
+            '--enable-opcache',
+            '--without-pear',
+            ...$result,
+        ]));
+    }
 }

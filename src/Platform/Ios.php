@@ -45,7 +45,7 @@ class Ios extends UnixPlatform
      * Its path is resolved from PHPX_HOME by CompilerBase, and php-config is
      * never executed for the target.
      */
-    public function buildPhpIncludePaths(string $phpDir): array
+    public function buildPhpIncludePaths(string $phpDir, bool $allowTargetVersion = false): array
     {
         $paths = [
             $phpDir . '/include/php',

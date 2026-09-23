@@ -10,7 +10,13 @@ namespace TypePhp\Build;
 
 final class EmbeddedTableRenderer
 {
-    public function render(EmbeddedArchive $archive, string $phpVersion, bool $windows): string
+    public function render(
+        EmbeddedArchive $archive,
+        string $phpVersion,
+        bool $windows,
+        bool $emitEmptyRuntimeHooks = true,
+        ?string $entryFile = null,
+    ): string
     {
         $code = '#include <typephp_opcode_table.h>' . PHP_EOL;
         if (!$archive->isEmpty()) {
@@ -32,7 +38,11 @@ final class EmbeddedTableRenderer
         );
         $version = json_encode($phpVersion, JSON_THROW_ON_ERROR);
         $code .= 'extern "C" const char *typephp_project_php_version(void) { return ' . $version . '; }' . PHP_EOL;
-        if ($archive->isEmpty()) {
+        $entry = $entryFile === null
+            ? 'nullptr'
+            : json_encode($entryFile, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+        $code .= 'extern "C" const char *typephp_project_entry_file(void) { return ' . $entry . '; }' . PHP_EOL;
+        if ($archive->isEmpty() && $emitEmptyRuntimeHooks) {
             $code .= 'extern "C" void typephp_opcode_table_install(void) {}' . PHP_EOL;
             $code .= 'extern "C" void typephp_opcode_table_uninstall(void) {}' . PHP_EOL;
         }

@@ -1,31 +1,41 @@
 <?php
 /**
- * This file is part of TypePHP.
+ * This file is part of TypePHP(AOT).
  *
- * @link     https://www.swoole.com/
+ * @link     https://www.swoole.com/aot/
  * @contact  service@swoole.com
  */
 
 namespace TypePhp;
 
-use TypePhp\Analysis\CompilationStatistics;
-use TypePhp\Build\AstCache;
-use TypePhp\Build\CompilerRuntime;
-use TypePhp\Build\PhpxLocator;
-use TypePhp\Build\StableIdRegistry;
-
 use League\CLImate\CLImate;
+use PhpParser\Modifiers;
+use PhpParser\Node;
+use PhpParser\Node\Expr;
+use PhpParser\Node\Expr\CallLike;
+use PhpParser\Node\Expr\Variable;
+use PhpParser\Node\FunctionLike;
+use PhpParser\NodeAbstract;
+use PhpParser\Parser;
+use PhpParser\ParserFactory;
+use PhpParser\PhpVersion;
+use PhpParser\PrettyPrinter;
+use TypePhp\Analysis\CompilationStatistics;
 use TypePhp\Backend\CompilerBackend;
 use TypePhp\Backend\CompilerFactory;
+use TypePhp\Build\AstCache;
+use TypePhp\Build\CompilerRuntime;
 use TypePhp\Build\NativeBuildConfigurationTrait;
-use TypePhp\Entity\ArgInfo;
-use TypePhp\Context\FunctionContext;
+use TypePhp\Build\PhpxLocator;
+use TypePhp\Build\StableIdRegistry;
 use TypePhp\Context\CompilationStateTrait;
+use TypePhp\Context\FunctionContext;
+use TypePhp\Diagnostics\CliDiagnosticReporter;
 use TypePhp\Diagnostics\CompilerDiagnosticTrait;
 use TypePhp\Diagnostics\CompileTimeAttributeDiagnostic;
-use TypePhp\Diagnostics\CliDiagnosticReporter;
 use TypePhp\Diagnostics\DiagnosticReporter;
 use TypePhp\Diagnostics\ThrowingDiagnosticReporter;
+use TypePhp\Entity\ArgInfo;
 use TypePhp\Entity\ClassDef;
 use TypePhp\Entity\ConstantDef;
 use TypePhp\Entity\FunctionDef;
@@ -33,24 +43,26 @@ use TypePhp\Entity\InterfaceDef;
 use TypePhp\Entity\MethodDef;
 use TypePhp\Entity\PropertyDef;
 use TypePhp\Exception\DynamicCall;
-use TypePhp\Exception\Redo;
 use TypePhp\Exception\Unsupported;
 use TypePhp\Generator\AnonClassGenerator;
 use TypePhp\Generator\CallArgumentGenerator;
 use TypePhp\Generator\ClosureGenerator;
 use TypePhp\Generator\FiberGenerator;
-use TypePhp\Generator\PlaceHolderGenerator;
 use TypePhp\Generator\ParameterCountCheckGenerator;
+use TypePhp\Generator\PlaceHolderGenerator;
 use TypePhp\Generator\PropertyPromotion;
 use TypePhp\Generator\Symbol;
-use TypePhp\Generator\Utils;
 use TypePhp\Generator\TypeCheckGenerator;
+use TypePhp\Generator\Utils;
+use TypePhp\Immutable\ImmutableSupportTrait;
+use TypePhp\NativeClass\NativeClassSupportTrait;
+use TypePhp\NativeClass\NativeGlobalTypeResolver;
+use TypePhp\Optimizer\FuncCallOptimizer;
+use TypePhp\Optimizer\LoopVarOptimizer;
 use TypePhp\Optimizer\SsaPropOptimizer;
 use TypePhp\Optimizer\SsaTypeOptimizer;
-use TypePhp\Optimizer\LoopVarOptimizer;
-use TypePhp\Parser\StdContainerTrait;
-use TypePhp\Parser\AssignOpTrait;
 use TypePhp\Parser\ArrayExpressionTrait;
+use TypePhp\Parser\AssignOpTrait;
 use TypePhp\Parser\AstNodeType;
 use TypePhp\Parser\BinaryOpTrait;
 use TypePhp\Parser\ClassConstantFetchTrait;
@@ -64,15 +76,15 @@ use TypePhp\Parser\MethodCallTrait;
 use TypePhp\Parser\NullsafeAccessTrait;
 use TypePhp\Parser\PropertyAccessTrait;
 use TypePhp\Parser\SelectionExpressionTrait;
+use TypePhp\Parser\StdContainerTrait;
 use TypePhp\Parser\SwitchTrait;
 use TypePhp\Parser\TypeConversionTrait;
 use TypePhp\Parser\TypeDetectionTrait;
 use TypePhp\Parser\UnaryExpressionTrait;
 use TypePhp\Parser\UniversalMethodCall;
-use TypePhp\Optimizer\FuncCallOptimizer;
-use TypePhp\Platform\Linux;
-use TypePhp\Platform\Ios;
 use TypePhp\Platform\Android;
+use TypePhp\Platform\Ios;
+use TypePhp\Platform\Linux;
 use TypePhp\Platform\Macos;
 use TypePhp\Platform\PlatformBase;
 use TypePhp\Platform\PlatformFactory;
@@ -80,31 +92,16 @@ use TypePhp\Platform\Windows;
 use TypePhp\Python\PythonModuleTrait;
 use TypePhp\Resolver\DeclarationSymbolTrait;
 use TypePhp\Resolver\MagicMethodDetector;
-use TypePhp\Resolver\PropertyAccessContext;
-use TypePhp\Resolver\NativePropertyAccess;
 use TypePhp\Resolver\NameResolutionTrait;
-use TypePhp\Resolver\PropertyAccessResult;
+use TypePhp\Resolver\NativePropertyAccess;
+use TypePhp\Resolver\PropertyAccessContext;
 use TypePhp\Resolver\PropertyAccessResolver;
+use TypePhp\Resolver\PropertyAccessResult;
 use TypePhp\Resolver\Reflection;
 use TypePhp\Symbol\SymbolRepository;
 use TypePhp\TypeSystem\CompositeTypeCheckerTrait;
 use TypePhp\TypeSystem\CompoundTypeDeclarationValidationTrait;
 use TypePhp\TypeSystem\NativeTypeCompatibilityTrait;
-use TypePhp\NativeClass\NativeClassSupportTrait;
-use TypePhp\NativeClass\NativeGlobalTypeResolver;
-use TypePhp\Immutable\ImmutableSupportTrait;
-use PhpParser\Modifiers;
-use PhpParser\Node;
-use PhpParser\Node\ArrayItem;
-use PhpParser\Node\Expr;
-use PhpParser\Node\Expr\CallLike;
-use PhpParser\Node\Expr\Variable;
-use PhpParser\Node\FunctionLike;
-use PhpParser\NodeAbstract;
-use PhpParser\Parser;
-use PhpParser\ParserFactory;
-use PhpParser\PhpVersion;
-use PhpParser\PrettyPrinter;
 
 class CompilerBase implements PropertyAccessContext
 {
@@ -377,12 +374,12 @@ class CompilerBase implements PropertyAccessContext
     public const string BUILD_MODE_BIN = 'bin';
     public const string BUILD_MODE_EXT = 'ext';
     public const string BUILD_MODE_LIB = 'lib';
+    public const string BUILD_MODE_SAPI = 'sapi';
     public const string ENTRY_FUNCTION = 'main';
     protected const string PHASE_IDLE = 'idle';
     protected const string PHASE_PREPARE = 'prepare';
     protected const string PHASE_COMPOSE = 'compose';
     protected const string PHASE_CONVERT = 'convert';
-
     protected string $lang = 'PHP';
     protected bool $verbose = false;
     protected int $indentLevel = 0;
@@ -402,6 +399,7 @@ class CompilerBase implements PropertyAccessContext
      * @var array<string, int>
      */
     protected array $classMap = [];
+
     /**
      * Built-in / compiled-output (module-lifetime) class name → ID. Lazily
      * populated after PHP startup and NOT cleared on RSHUTDOWN.
@@ -409,6 +407,7 @@ class CompilerBase implements PropertyAccessContext
      */
     protected array $persistentClassMap = [];
     protected int $persistentClassIndex = 0;
+
     /**
      * @var array<string, int>
      */
@@ -422,6 +421,7 @@ class CompilerBase implements PropertyAccessContext
      * @var array<string, int>
      */
     protected array $funcMap = [];
+
     /**
      * Built-in / compiled-output (module-lifetime) function/method → ID. Lazily
      * populated after PHP startup and NOT cleared on RSHUTDOWN.
@@ -430,6 +430,7 @@ class CompilerBase implements PropertyAccessContext
      */
     protected array $persistentFuncMap = [];
     protected int $persistentFuncIndex = 0;
+
     /**
      * Declared-property offset cache for built-in / compiled-output classes.
      * Key is `Class::prop`; lazily populated and NOT cleared on RSHUTDOWN.
@@ -439,6 +440,7 @@ class CompilerBase implements PropertyAccessContext
      */
     protected array $persistentPropMap = [];
     protected int $persistentPropIndex = 0;
+
     /**
      * Per-generated-access-site Zend object-handler cache slots. Unlike the
      * declared-property offset cache above, these are request-local and may
@@ -448,11 +450,14 @@ class CompilerBase implements PropertyAccessContext
     protected int $methodCallCacheIndex = 0;
     protected int $functionCallCacheIndex = 0;
     protected int $functionResolutionCacheIndex = 0;
+
     /** @var array<string, int> Per-function ordinal used to name dynamic cache sites. */
     protected array $cacheSiteOrdinals = [];
+
     /** Separates declaration-expression sites from executable function bodies. */
     protected string $cacheSitePass = 'body';
     protected ?StableIdRegistry $stableIdRegistry = null;
+
     /** @var array<string, array<Node\Stmt>> Prepared declaration ASTs keyed by real path. */
     protected array $preparedFileAsts = [];
     protected bool $traitDeclarationsComposed = false;
@@ -502,8 +507,10 @@ class CompilerBase implements PropertyAccessContext
      * @var array<string, array<string>>
      */
     protected array $symbolCallInFile = [];
+
     /** @var array<string, string> Canonical PHP file => generated declaration header. */
     protected array $declarationHeaderFiles = [];
+
     /** @var array<string, true> C++ translation units emitted by this compiler run. */
     protected array $generatedProjectSources = [];
     protected array $redoAfterDeclare = [];
@@ -520,11 +527,14 @@ class CompilerBase implements PropertyAccessContext
     protected string $ldflags = '';
     protected array $linkLibs = [];    // --link-lib / -l: user-specified libraries to link
     protected array $linkPaths = [];   // --link-path / -L: user-specified library search paths
+
     /** @var list<string> Precompiled project object files linked into the target. */
     protected array $projectObjectFiles = [];
+
     /** @var list<string> Required PHP modules recorded in zend_module_entry.deps. */
     protected array $extensionDependencies = [];
     protected string $extensionVersion = '';
+
     /** @var array<string, string> Custom rows shown in the module's phpinfo section. */
     protected array $extensionInfo = [];
     protected bool $debug = false;
@@ -538,16 +548,38 @@ class CompilerBase implements PropertyAccessContext
     protected array $userDefines = [];       // --define / -D: user-provided preprocessor macros
     protected bool $enableLto = false;       // --lto: enable Link Time Optimization (-flto)
     protected bool $fullStatic = false;      // --full-static: link against the bundled fully-static SDK
+
     /** Generate a VM-less program entry for the Composer php-nano runtime. */
     protected bool $nanoMode = false;
+
+    /** @var list<string> */
+    protected array $sapiTargets = [];
+
+    /** Absolute path of the embedded primary script used by the CLI SAPI. */
+    protected ?string $sapiEntryFile = null;
+    protected ?string $sapiPhpSourceDirectory = null;
+    protected ?string $sapiPhpBuildDirectory = null;
+    protected ?string $sapiPhpPrefix = null;
+    protected ?string $sapiPhpxArchive = null;
+
+    /** @var array<string, string> */
+    protected array $sapiRuntimeArchives = [];
+
+    /** @var list<string> */
+    protected array $sapiEnabledExtensions = [];
+
     /** Enforce the VM-free and external-command restrictions of `--nano`. */
     protected bool $nanoPolicyMode = false;
+
     /** @var list<string> Include directories published by Nano Composer packages. */
     protected array $nanoRuntimeIncludePaths = [];
+
     /** @var list<string> */
     protected array $nanoRuntimeDefines = [];
+
     /** @var array<string, true> Package source files compiled into a Nano executable. */
     protected array $nanoRuntimeSources = [];
+
     /** Latest header timestamp used by the shared object-cache path. */
     protected int $nanoRuntimeHeaderMtime = 0;
     protected string $file;
@@ -563,6 +595,7 @@ class CompilerBase implements PropertyAccessContext
     protected array $useAliases = [];
     protected array $useFunctions = [];
     protected array $useConstants = [];
+
     /** @var array<int, array<string, string>> Import aliases separated by class/function/constant domain. */
     protected array $useImportAliases = [];
 
@@ -572,28 +605,32 @@ class CompilerBase implements PropertyAccessContext
     protected string $class = '';
     protected string $parentClass = '';
     protected string $interface = '';
+
     /**
      * @var array<string, ConstantDef>
      */
     protected array $constants = [];
+
     /**
      * @var array<string, ClassDef>
      */
     protected array $classesDefineInFile = [];
+
     /**
      * @var array<string, InterfaceDef>
      */
     protected array $interfacesDefineInFile = [];
+
     /**
      * @var array<string, FunctionDef>
      */
     protected array $functionDefineInFile = [];
-
     protected ?FunctionDef $functionDef = null;
     protected ?ClassDef $classDef = null;
     protected ?MethodDef $methodDef = null;
     protected ?InterfaceDef $interfaceDef = null;
     protected bool $inGeneratorBody = false;
+
     /** Parameter-default helpers have no ordinary function-entry declaration block. */
     protected bool $allowLocalClassEntryHoisting = true;
     private ?DiagnosticReporter $diagnosticReporter = null;
@@ -610,22 +647,31 @@ class CompilerBase implements PropertyAccessContext
         'GLOBALS'  => Type::ARRAY,
     ];
     protected array $globalVars = [];
+
     /** @var array<string, array<string, string>> PHP source => global slot => inferred type. */
     protected array $globalVarsInFile = [];
+
     /** @var array<string, string> Global/static storage name => owning PHP file. */
     protected array $globalVarDeclInFile = [];
+
     /** @var array<string, string> Global/static Native pointer slot => class name. */
     protected array $nativeGlobalObjects = [];
+
     /** Immutable metadata shared by Native global pre-discovery and lowering. */
     protected ?NativeGlobalTypeResolver $nativeGlobalTypeResolver = null;
+
     /** @var array<string, string> Lowercase class name => declared Native class name. */
     protected array $nativeClassDeclarations = [];
+
     /** @var array<string, true> Request-reset initialization flags for Native static locals. */
     protected array $nativeStaticInitializers = [];
+
     /** @var array<string, array<string, true>> PHP source => Native static initialization flags. */
     protected array $nativeStaticInitializersInFile = [];
+
     /** @var array<string, string> Native static initialization flag => owning PHP file. */
     protected array $nativeStaticInitializerDeclInFile = [];
+
     /** Box inferred integer locals in php::Var to retain Zend integer widening semantics. */
     protected bool $varIntTypes = false;
     protected bool $decimalTypes = false;
@@ -654,7 +700,7 @@ class CompilerBase implements PropertyAccessContext
     // Windows platform: store the detected PHP lib file paths.
     protected string $windowsPhpEmbedLib = '';  // Path to php8embed.lib
     protected string $windowsPhpCoreLib = '';   // Path to php8ts.lib or php8.lib
-    
+
     // New platform and compiler abstraction layers (optional to use).
     protected ?PlatformBase $platform = null;
     protected ?CompilerBackend $compilerBackend = null;
@@ -683,6 +729,7 @@ class CompilerBase implements PropertyAccessContext
 
     /** Whole-program usage collected during the convert phase. */
     protected CompilationStatistics $compilationStatistics;
+
     /** @var array<string, true> Fully resolved class names referenced by source code. */
     protected array $referencedClasses = [];
 
@@ -922,9 +969,25 @@ class CompilerBase implements PropertyAccessContext
         return $this->buildMode === self::BUILD_MODE_LIB;
     }
 
+    public function isBuildModeSapi(): bool
+    {
+        return $this->buildMode === self::BUILD_MODE_SAPI;
+    }
+
     public function isBuildModeEmbed(): bool
     {
-        return $this->isBuildModeBin() || $this->isBuildModeLib();
+        return $this->isBuildModeBin() || $this->isBuildModeLib() || $this->isBuildModeSapi();
+    }
+
+    public function isSapiBuild(): bool
+    {
+        return $this->sapiTargets !== [];
+    }
+
+    /** @return list<string> */
+    public function getSapiTargets(): array
+    {
+        return $this->sapiTargets;
     }
 
     public function getPhpDir(): string
@@ -1037,10 +1100,10 @@ class CompilerBase implements PropertyAccessContext
         if ($expr->getLine() === $this->debugLine) {
             dump($expr);
         }
-        if ($expr instanceof Node\Expr\BinaryOp) {
+        if ($expr instanceof Expr\BinaryOp) {
             $this->assertNativeObjectBinaryOperatorSupported($expr);
         }
-        if ($expr instanceof Expr\Variable) {
+        if ($expr instanceof Variable) {
             $varName = $this->parseIdentifier($expr);
             $this->requireVar($expr, $varName);
             if ($this->isStdContainer($varName)) {
@@ -1265,9 +1328,9 @@ class CompilerBase implements PropertyAccessContext
     /**
      * Resolve the ClassDef for an object expression (variable or $this).
      */
-    private function resolveObjectClassDef(Node\Expr $expr): ?ClassDef
+    private function resolveObjectClassDef(Expr $expr): ?ClassDef
     {
-        if ($expr instanceof Expr\Variable) {
+        if ($expr instanceof Variable) {
             $name = $this->parseIdentifier($expr);
             if ($name === 'this_' && $this->classDef) {
                 return $this->classDef;
@@ -1462,7 +1525,7 @@ class CompilerBase implements PropertyAccessContext
      */
     protected function materializeRefReturnAsValue(NodeAbstract $value, string $expr): string
     {
-        if ($value instanceof Expr\CallLike && $this->resolveRefReturningCall($value) !== false) {
+        if ($value instanceof CallLike && $this->resolveRefReturningCall($value) !== false) {
             $tmpVar = $this->addTmpVar(Type::VAR);
             return '(' . $tmpVar . ' = ' . $expr . ')';
         }
@@ -1773,14 +1836,7 @@ class CompilerBase implements PropertyAccessContext
         $persistentMethod = isset($this->persistentFuncMap[$key]);
         $persistentClass = isset($this->persistentClassMap[$class]);
         if ($persistentMethod !== $persistentClass) {
-            throw new \LogicException(sprintf(
-                'Cache lifetime mismatch for %s: method ID %d is %s, class ID %d is %s',
-                $key,
-                $funcId,
-                $persistentMethod ? 'persistent' : 'request-local',
-                $classId,
-                $persistentClass ? 'persistent' : 'request-local',
-            ));
+            throw new \LogicException(sprintf('Cache lifetime mismatch for %s: method ID %d is %s, class ID %d is %s', $key, $funcId, $persistentMethod ? 'persistent' : 'request-local', $classId, $persistentClass ? 'persistent' : 'request-local'));
         }
         $helper = $persistentMethod ? 'get_persistent_method' : 'get_method';
         $funcIdType = $persistentMethod ? 'PersistentFuncId' : 'RequestFuncId';
@@ -1949,9 +2005,9 @@ class CompilerBase implements PropertyAccessContext
         }
         if ($expr instanceof Node\Scalar\String_) {
             $value = trim($expr->value);
-            return $value !== '' && is_numeric($value) && (float)$value == 0.0;
+            return $value !== '' && is_numeric($value) && (float) $value == 0.0;
         }
-        if ($expr instanceof Node\Expr\ConstFetch or $expr instanceof Node\Expr\ClassConstFetch) {
+        if ($expr instanceof Expr\ConstFetch or $expr instanceof Expr\ClassConstFetch) {
             return in_array($this->parseExpr($expr), ['0L', '0LL']);
         }
         return false;
@@ -2328,7 +2384,7 @@ class CompilerBase implements PropertyAccessContext
         }
         if ($expr instanceof Expr\MethodCall && $expr->name instanceof Node\Identifier) {
             $class = $this->detectClassOfExpr($expr->var);
-            if ($class === '' && $expr->var instanceof Expr\Variable && is_string($expr->var->name)) {
+            if ($class === '' && $expr->var instanceof Variable && is_string($expr->var->name)) {
                 $var = $this->parseVariable($expr->var);
                 $class = $var === 'this_' ? $this->getFullClassName() : $this->getDeclaredObjectType($var);
             }
@@ -2670,7 +2726,7 @@ class CompilerBase implements PropertyAccessContext
             if ($function !== false) {
                 return $this->getFunction($function)->returnsByRef;
             }
-            $reflection = \TypePhp\Resolver\Reflection::getFunction(ltrim($this->getNamespacedFuncName($name), '\\'));
+            $reflection = Reflection::getFunction(ltrim($this->getNamespacedFuncName($name), '\\'));
             return $reflection?->returnsReference();
         }
         if ($expr instanceof Expr\FuncCall) {
@@ -2806,9 +2862,11 @@ class CompilerBase implements PropertyAccessContext
             }
             if ($this->functionDef->returnType === Type::VOID and !$this->context->inClosure) {
                 return 'return;';
-            } elseif ($this->shouldCheckClosureReturnType()) {
+            }
+            if ($this->shouldCheckClosureReturnType()) {
                 return $this->genClosureCheckedReturn(self::VALUE_NULL);
-            } elseif ($this->functionDef->returnTypeCheck && !$this->context->inClosure) {
+            }
+            if ($this->functionDef->returnTypeCheck && !$this->context->inClosure) {
                 return $this->genUnionCheckedReturn(self::VALUE_NULL);
             } else {
                 return 'return ' . self::VALUE_NULL . ';';
@@ -3223,9 +3281,8 @@ class CompilerBase implements PropertyAccessContext
         NodeAbstract $expr,
         string $class,
         string $const,
-        ?string $accessingClass = null
-    ): string|false
-    {
+        ?string $accessingClass = null,
+    ): string|false {
         if (!$this->hasClass($class)) {
             return false;
         }
@@ -3755,12 +3812,12 @@ class CompilerBase implements PropertyAccessContext
             $this->addLocalVar($tmpVar, Type::VAR);
             $read = $this->emitPropertyHookGetterCall($var, $getter);
             if ($isPre) {
-                $set = $this->emitPropertyHookSetterCall($var, $setter, new Expr\Variable($tmpVar));
+                $set = $this->emitPropertyHookSetterCall($var, $setter, new Variable($tmpVar));
                 $this->context->beforeStmtLines[] = "{$tmpVar} = {$read} {$op} 1; {$set};";
             } else {
                 $nextVar = $this->genTmpVarName();
                 $this->addLocalVar($nextVar, Type::VAR);
-                $set = $this->emitPropertyHookSetterCall($var, $setter, new Expr\Variable($nextVar));
+                $set = $this->emitPropertyHookSetterCall($var, $setter, new Variable($nextVar));
                 $this->context->beforeStmtLines[] = "{$tmpVar} = {$read};";
                 $this->context->afterStmtLines[] = "{$nextVar} = {$tmpVar} {$op} 1; {$set};";
             }
@@ -3858,7 +3915,7 @@ class CompilerBase implements PropertyAccessContext
         return false;
     }
 
-    protected function checkInternalFunctionArgCount(string $funcName, Node\Expr\FuncCall $expr): void
+    protected function checkInternalFunctionArgCount(string $funcName, Expr\FuncCall $expr): void
     {
         $ref = Reflection::getFunction($funcName);
         if ($ref) {
@@ -4199,7 +4256,6 @@ class CompilerBase implements PropertyAccessContext
      * argument to the callable on the right. Materialising the left operand
      * also avoids relying on C++ argument-evaluation order.
      */
-
     protected function parsePostOp(Expr\PostDec|Expr\PostInc $expr, string $op): string
     {
         if ($this->getTypedArrayAccessDefinition($expr->var) !== null) {
@@ -4791,10 +4847,10 @@ class CompilerBase implements PropertyAccessContext
         }
 
         if ($scope) {
-            return "php::include(php::Var($fileName), $type, php::Array{" . implode(', ', $scope) . '})';
+            return "php::include(php::Var({$fileName}), {$type}, php::Array{" . implode(', ', $scope) . '})';
         }
 
-        return "php::include(php::Var($fileName), $type)";
+        return "php::include(php::Var({$fileName}), {$type})";
     }
 
     protected function parseScalarFloat(Node\Scalar\Float_ $expr): string
@@ -5026,7 +5082,7 @@ class CompilerBase implements PropertyAccessContext
         $class = $this->getNativeArrayAccessClass($receiver, $access);
         if (!$this->isVarExpr($receiver)) {
             $receiverName = $this->materializeNativeObjectReceiver($receiver, $class);
-            $receiver = new Expr\Variable($receiverName, $receiver->getAttributes());
+            $receiver = new Variable($receiverName, $receiver->getAttributes());
         }
 
         $key = $this->addTmpVar(Type::VAR);
@@ -5034,7 +5090,7 @@ class CompilerBase implements PropertyAccessContext
         $this->context->beforeStmtLines[] = $key . ' = ' . $keyExpr . ';';
         $stableAccess = new Expr\ArrayDimFetch(
             $receiver,
-            new Expr\Variable($key, $access->dim->getAttributes()),
+            new Variable($key, $access->dim->getAttributes()),
             $access->getAttributes(),
         );
         $exists = $this->parseNativeArrayAccessCall(
@@ -5559,7 +5615,7 @@ class CompilerBase implements PropertyAccessContext
         if ($this->isVarExpr($left)) {
             $varName = '`$' . $this->parseIdentifier($left) . '`';
         }
-        $this->fatalError($left, "Cannot re-assign $varName from `{$fromType}` to `{$toType}`");
+        $this->fatalError($left, "Cannot re-assign {$varName} from `{$fromType}` to `{$toType}`");
     }
 
     protected function checkTypedReferenceAssignExpr(
@@ -5602,9 +5658,8 @@ class CompilerBase implements PropertyAccessContext
     protected function checkAccessibleByClassName(
         string $declaringClass,
         int $flags,
-        ?string $accessingClass = null
-    ): bool
-    {
+        ?string $accessingClass = null,
+    ): bool {
         if ($accessingClass !== null) {
             $accessingClass = ltrim($accessingClass, '\\');
             $scopeClassDef = $this->hasClass($accessingClass)

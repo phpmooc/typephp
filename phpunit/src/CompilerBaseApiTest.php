@@ -1,16 +1,26 @@
 <?php
+/**
+ * This file is part of TypePHP(AOT).
+ *
+ * @link     https://www.swoole.com/aot/
+ * @contact  service@swoole.com
+ */
 
 namespace TypePhp\Tests;
 
 use PHPUnit\Framework\TestCase;
-use TypePhp\CompilerTest;
 use TypePhp\CompilerBase;
-use TypePhp\Metadata\Constants;
-use TypePhp\Type;
+use TypePhp\CompilerTest;
 use TypePhp\Exception\TestError;
+use TypePhp\Metadata\Constants;
 use TypePhp\Platform\Macos;
 use TypePhp\Platform\Windows;
+use TypePhp\Type;
 
+/**
+ * @internal
+ * @coversNothing
+ */
 class CompilerBaseApiTest extends TestCase
 {
     private string $testDir;
@@ -60,7 +70,11 @@ class CompilerBaseApiTest extends TestCase
 
     private function getPropertyValue(string $name): mixed
     {
-        $prop = $this->ref->getProperty($name);
+        $class = $this->ref;
+        while (!$class->hasProperty($name) && ($parent = $class->getParentClass()) !== false) {
+            $class = $parent;
+        }
+        $prop = $class->getProperty($name);
         $prop->setAccessible(true);
         return $prop->getValue($this->compiler);
     }
@@ -153,7 +167,7 @@ PHP);
         foreach (['classMap', 'persistentClassMap', 'funcMap', 'persistentFuncMap', 'persistentPropMap'] as $map) {
             $this->assertSame([], $this->getPropertyValue($map), $map);
         }
-        $defaults = $this->compiler->getClassDef('CachePhase\\Defaults');
+        $defaults = $this->compiler->getClassDef('CachePhase\Defaults');
         $this->assertNotNull($defaults);
         $this->assertInstanceOf(
             \PhpParser\Node\Expr\ClassConstFetch::class,
@@ -169,7 +183,7 @@ PHP);
 
         $this->assertSame([], $this->getPropertyValue('classMap'));
         $this->assertArrayHasKey(
-            'CachePhase\\LateClass',
+            'CachePhase\LateClass',
             $this->getPropertyValue('persistentClassMap'),
         );
         $this->assertNotSame('', $defaults->getConstant('VALUE')->value);
@@ -431,7 +445,7 @@ PHP);
 
     public function testUnqualifiedRuntimeConstantUsesNamespaceFallback(): void
     {
-        $this->setPropertyValue('namespace', 'App\\Worker');
+        $this->setPropertyValue('namespace', 'App\Worker');
         $this->setPropertyValue('noLiteralStrings', true);
 
         $code = $this->invokeMethod(
@@ -440,23 +454,23 @@ PHP);
         );
 
         $this->assertStringNotContainsString('php::fn::defined(', $code);
-        $this->assertStringContainsString('App\\\\Worker\\\\COMPOSER_PATH', $code);
+        $this->assertStringContainsString('App\\\Worker\\\COMPOSER_PATH', $code);
         $this->assertStringEndsWith(', php::ConstantLookup::UnqualifiedInNamespace)', $code);
         $this->assertStringNotContainsString('php::constant(nullptr,', $code);
     }
 
     public function testQualifiedRuntimeConstantDoesNotUseGlobalFallback(): void
     {
-        $this->setPropertyValue('namespace', 'App\\Worker');
+        $this->setPropertyValue('namespace', 'App\Worker');
         $this->setPropertyValue('noLiteralStrings', true);
 
         $code = $this->invokeMethod(
             'parseConstFetch',
-            new \PhpParser\Node\Expr\ConstFetch(new \PhpParser\Node\Name('Config\\PATH'))
+            new \PhpParser\Node\Expr\ConstFetch(new \PhpParser\Node\Name('Config\PATH'))
         );
 
         $this->assertStringNotContainsString('php::fn::defined(', $code);
-        $this->assertStringContainsString('App\\\\Worker\\\\Config\\\\PATH', $code);
+        $this->assertStringContainsString('App\\\Worker\\\Config\\\PATH', $code);
     }
 
     public function testInlineStringArrayKeyUsesZendStringPointer(): void
@@ -685,7 +699,7 @@ YAML);
             "zend_module_entry typephp_app_module_entry = {\n"
             . "    STANDARD_MODULE_HEADER_EX,\n"
             . "    nullptr,\n"
-            . "    typephp_app_module_deps,",
+            . '    typephp_app_module_deps,',
             $extension,
         );
     }
@@ -719,8 +733,8 @@ YAML);
             'php_info_print_table_header(2, "typephp_metadata_demo support", "enabled");',
             $extension,
         );
-        $this->assertStringContainsString('php_info_print_table_row(2, "Maintainer", "TypePHP \\"Core\\" Team");', $extension);
-        $this->assertStringContainsString('php_info_print_table_row(2, "Description", "Native PHP\\\\C++ extension");', $extension);
+        $this->assertStringContainsString('php_info_print_table_row(2, "Maintainer", "TypePHP \"Core\" Team");', $extension);
+        $this->assertStringContainsString('php_info_print_table_row(2, "Description", "Native PHP\\\C++ extension");', $extension);
         $this->assertStringContainsString('php_info_print_table_row(2, "Stable", "true");', $extension);
         $this->assertStringContainsString(
             "    PHP_MINFO(typephp_metadata_demo),\n"
@@ -881,6 +895,96 @@ YAML, 'myproject.yml', 'examples/tetris-sdl');
         $this->compiler->setTargetName('demo');
 
         $this->assertSame('demo.so', $this->invokeMethod('getTargetFileName'));
+    }
+
+    public function testSingleSapiTargetUsesConfiguredOutputName(): void
+    {
+        $this->compiler->setOutputPath($this->testDir . '/build/app');
+        $this->invokeMethod('configureSapiTargets', 'fpm');
+
+        $this->assertSame(
+            ['fpm' => $this->testDir . '/build/app'],
+            $this->compiler->getSapiOutputFiles(),
+        );
+    }
+
+    public function testBothSapiTargetsHaveExplicitTargetSuffixes(): void
+    {
+        $this->compiler->setOutputPath($this->testDir . '/build/app');
+        $this->invokeMethod('configureSapiTargets', 'both');
+
+        $this->assertSame(
+            [
+                'cli' => $this->testDir . '/build/app-cli',
+                'fpm' => $this->testDir . '/build/app-fpm',
+            ],
+            $this->compiler->getSapiOutputFiles(),
+        );
+    }
+
+    public function testSapiBuildModeDefaultsToCliTarget(): void
+    {
+        $this->compiler->setBuildMode(CompilerBase::BUILD_MODE_SAPI);
+
+        $this->assertSame(['cli'], $this->compiler->getSapiTargets());
+        $this->assertTrue($this->compiler->isSapiBuild());
+    }
+
+    public function testSapiCliEntryIsEmbeddedAndExcludedFromAotSources(): void
+    {
+        $projectFile = $this->createProjectFile(<<<'YAML'
+sapi: cli
+entry: main.php
+sources:
+  - main.php
+YAML);
+
+        $files = $this->invokeMethod('parseProjectYaml', $projectFile);
+        $entry = realpath(dirname($projectFile) . '/main.php');
+
+        $this->assertSame([], $files);
+        $this->assertSame($entry, $this->getPropertyValue('sapiEntryFile'));
+        $this->assertSame([$entry], $this->getPropertyValue('embeddedFiles'));
+        $this->assertSame([$entry], $this->getPropertyValue('embeddedPhpFiles'));
+        $this->invokeMethod('validateLoadedProjectConfiguration');
+    }
+
+    public function testSapiCliRequiresEntry(): void
+    {
+        $projectFile = $this->createProjectFile(<<<'YAML'
+sapi: cli
+sources:
+  - main.php
+YAML);
+        $this->invokeMethod('parseProjectYaml', $projectFile);
+
+        $this->expectException(TestError::class);
+        $this->expectExceptionMessage('CLI SAPI builds require an `entry` PHP file');
+        $this->invokeMethod('validateLoadedProjectConfiguration');
+    }
+
+    public function testSapiFpmDoesNotRequireCliEntry(): void
+    {
+        $projectFile = $this->createProjectFile(<<<'YAML'
+sapi: fpm
+sources:
+  - main.php
+YAML);
+        $this->invokeMethod('parseProjectYaml', $projectFile);
+
+        $this->invokeMethod('validateLoadedProjectConfiguration');
+        $this->assertSame(['fpm'], $this->compiler->getSapiTargets());
+    }
+
+    public function testProjectWithoutAotSourcesUsesRuntimeDeclarationHeader(): void
+    {
+        $this->compiler->setTargetName('opcode_only');
+
+        $headers = $this->invokeMethod('genExtensionIncludeHeaderFiles');
+
+        $this->assertStringContainsString('php_opcode_only_runtime_decl.h', $headers);
+        $this->assertStringNotContainsString('php_opcode_only_func_decl.h', $headers);
+        $this->assertStringNotContainsString('php_opcode_only_data_decl.h', $headers);
     }
 
     public function testGeneratedZendModuleAndProjectNamespaceUseDistinctPrefixes(): void
@@ -1252,7 +1356,7 @@ sources:
     if: PHP_OS_FAMILY >= "Linux"
 YAML);
 
-        $this->expectException(\TypePhp\Exception\TestError::class);
+        $this->expectException(TestError::class);
         $this->expectExceptionMessage('Unsupported source condition');
 
         $this->invokeMethod('parseProjectYaml', $projectFile);
@@ -1266,7 +1370,7 @@ sources:
     if: PHP_VERSION
 YAML);
 
-        $this->expectException(\TypePhp\Exception\TestError::class);
+        $this->expectException(TestError::class);
         $this->expectExceptionMessage('Unsupported source condition');
 
         $this->invokeMethod('parseProjectYaml', $projectFile);
@@ -1280,7 +1384,7 @@ sources:
     if: PHP_VERSION_ID >= getenv("MIN_PHP")
 YAML);
 
-        $this->expectException(\TypePhp\Exception\TestError::class);
+        $this->expectException(TestError::class);
         $this->expectExceptionMessage('Unsupported source condition');
 
         $this->invokeMethod('parseProjectYaml', $projectFile);
@@ -1724,7 +1828,7 @@ YAML);
             'TYPEPHP_COLD_ATTRIBUTE php::Str php_libraryapi__counter__label(',
             $phpCpp,
         );
-        $provider = $this->invokeMethod('getClass', 'LibraryApi\\InternalStringExtension');
+        $provider = $this->invokeMethod('getClass', 'LibraryApi\InternalStringExtension');
         $this->assertSame(Type::STR, $provider->methodsForTarget);
 
         $stubFile = $this->compiler->genLibraryImportStub($files);
@@ -1736,15 +1840,15 @@ YAML);
         $this->assertStringContainsString('public const int STEP = 2;', $stub);
         $this->assertStringContainsString('public int $value = 1;', $stub);
         $this->assertStringContainsString('#[\Constructor, \Getter, \Setter, \With]', $stub);
-        $this->assertStringContainsString("#[\Printer(fields: ['value', 'doubled'])]", $stub);
-        $this->assertStringContainsString("#[\Arrayable(['value'])]", $stub);
+        $this->assertStringContainsString("#[\\Printer(fields: ['value', 'doubled'])]", $stub);
+        $this->assertStringContainsString("#[\\Arrayable(['value'])]", $stub);
         $this->assertStringContainsString('#[\NotNull, \Validate(FILTER_VALIDATE_EMAIL)]', $stub);
         $this->assertStringContainsString('#[\MustUse, \Cold]', $stub);
         $this->assertStringContainsString('#[\MustUse, \Hot]', $stub);
         $this->assertStringContainsString('#[\Override]', $stub);
         $this->assertStringContainsString('#[\Immutable]', $stub);
         $this->assertMatchesRegularExpression(
-            '/function inspect\(\s*#\[\\\\Immutable\]\s*\\\\LibraryApi\\\\Counter \$counter\s*\): int/s',
+            '/function inspect\(\s*#\[\\\Immutable\]\s*\\\LibraryApi\\\Counter \$counter\s*\): int/s',
             $stub,
         );
         $this->assertMatchesRegularExpression(
@@ -1753,7 +1857,7 @@ YAML);
         );
         $this->assertStringContainsString('function add(int $amount = self::STEP): int', $stub);
         $this->assertMatchesRegularExpression(
-            '/function label\(\s*#\[\\\\NotNull, \\\\Validate\(FILTER_VALIDATE_EMAIL\)\]\s*string \$value\s*\): string/s',
+            '/function label\(\s*#\[\\\NotNull, \\\Validate\(FILTER_VALIDATE_EMAIL\)\]\s*string \$value\s*\): string/s',
             $stub,
         );
         $this->assertStringContainsString('function twice(int $value): int', $stub);
@@ -2092,8 +2196,8 @@ YAML);
     public function testGetNamespacedClassNameFullyQualified(): void
     {
         $this->assertEquals(
-            'App\\Entity\\User',
-            $this->compiler->getNamespacedClassName('\\App\\Entity\\User')
+            'App\Entity\User',
+            $this->compiler->getNamespacedClassName('\App\Entity\User')
         );
     }
 
@@ -2103,19 +2207,19 @@ YAML);
 
     public function testGetNamespacedClassNameWithUseAlias(): void
     {
-        $this->setPropertyValue('useAliases', ['user' => 'App\\Entity\\User']);
+        $this->setPropertyValue('useAliases', ['user' => 'App\Entity\User']);
         $this->assertEquals(
-            'App\\Entity\\User',
+            'App\Entity\User',
             $this->compiler->getNamespacedClassName('User')
         );
     }
 
     public function testGetNamespacedClassNameWithUseAliasSubNamespace(): void
     {
-        $this->setPropertyValue('useAliases', ['entity' => 'App\\Entity']);
+        $this->setPropertyValue('useAliases', ['entity' => 'App\Entity']);
         $this->assertEquals(
-            'App\\Entity\\User',
-            $this->compiler->getNamespacedClassName('Entity\\User')
+            'App\Entity\User',
+            $this->compiler->getNamespacedClassName('Entity\User')
         );
     }
 
@@ -2123,25 +2227,25 @@ YAML);
     {
         $use = new \PhpParser\Node\Stmt\Use_([
             new \PhpParser\Node\UseItem(
-                new \PhpParser\Node\Name('Vendor\\Package\\Notes'),
+                new \PhpParser\Node\Name('Vendor\Package\Notes'),
                 new \PhpParser\Node\Identifier('NotesFactory'),
             ),
         ]);
 
         $this->invokeMethod('parseUse', $use);
-        $this->setPropertyValue('namespace', 'Application\\Api');
+        $this->setPropertyValue('namespace', 'Application\Api');
 
         $this->assertSame([], $this->getPropertyValue('useNamespaces'));
         $this->assertSame(
-            ['notesfactory' => 'Vendor\\Package\\Notes'],
+            ['notesfactory' => 'Vendor\Package\Notes'],
             $this->getPropertyValue('useAliases'),
         );
         $this->assertSame(
-            'Vendor\\Package\\Notes',
+            'Vendor\Package\Notes',
             $this->compiler->getNamespacedClassName('NOTESFACTORY'),
         );
         $this->assertSame(
-            'Application\\Api\\Notes',
+            'Application\Api\Notes',
             $this->compiler->getNamespacedClassName('Notes'),
         );
     }
@@ -2152,21 +2256,21 @@ YAML);
 
     public function testGetNamespacedClassNameWithUseNamespace(): void
     {
-        $this->setPropertyValue('useNamespaces', ['App\\Entity']);
+        $this->setPropertyValue('useNamespaces', ['App\Entity']);
         // The last segment of 'App\Entity' is 'Entity', matching input 'Entity'
         $this->assertEquals(
-            'App\\Entity',
+            'App\Entity',
             $this->compiler->getNamespacedClassName('Entity')
         );
     }
 
     public function testGetNamespacedClassNameWithUseNamespaceSub(): void
     {
-        $this->setPropertyValue('useNamespaces', ['App\\Entity']);
+        $this->setPropertyValue('useNamespaces', ['App\Entity']);
         // 'Entity\User' - first part 'Entity' matches the last part of 'App\Entity'
         $this->assertEquals(
-            'App\\Entity\\User',
-            $this->compiler->getNamespacedClassName('Entity\\User')
+            'App\Entity\User',
+            $this->compiler->getNamespacedClassName('Entity\User')
         );
     }
 
@@ -2176,12 +2280,12 @@ YAML);
 
     public function testGetNamespacedClassNameWithCurrentNamespace(): void
     {
-        $this->setPropertyValue('namespace', 'App\\Service');
+        $this->setPropertyValue('namespace', 'App\Service');
         // No matching alias or use namespace
         $this->setPropertyValue('useAliases', []);
         $this->setPropertyValue('useNamespaces', []);
         $this->assertEquals(
-            'App\\Service\\MyClass',
+            'App\Service\MyClass',
             $this->compiler->getNamespacedClassName('MyClass')
         );
     }
@@ -2203,11 +2307,11 @@ YAML);
 
     public function testGetNamespacedClassNameAliasPriority(): void
     {
-        $this->setPropertyValue('useAliases', ['user' => 'App\\Models\\User']);
-        $this->setPropertyValue('useNamespaces', ['App\\Controllers']);
+        $this->setPropertyValue('useAliases', ['user' => 'App\Models\User']);
+        $this->setPropertyValue('useNamespaces', ['App\Controllers']);
         // Alias should be checked first
         $this->assertEquals(
-            'App\\Models\\User',
+            'App\Models\User',
             $this->compiler->getNamespacedClassName('User')
         );
     }
@@ -2219,18 +2323,18 @@ YAML);
     public function testGetNamespacedFuncNameFullyQualified(): void
     {
         $this->assertEquals(
-            'App\\Lib\\helper_func',
-            $this->compiler->getNamespacedFuncName('\\App\\Lib\\helper_func')
+            'App\Lib\helper_func',
+            $this->compiler->getNamespacedFuncName('\App\Lib\helper_func')
         );
     }
 
     public function testGetNamespacedFuncNameWithUseFunction(): void
     {
         $this->setPropertyValue('useFunctions', [
-            'helper_func' => 'App\\Lib\\helper_func',
+            'helper_func' => 'App\Lib\helper_func',
         ]);
         $this->assertEquals(
-            'App\\Lib\\helper_func',
+            'App\Lib\helper_func',
             $this->compiler->getNamespacedFuncName('helper_func')
         );
     }
@@ -2250,7 +2354,7 @@ YAML);
 
     public function testGetNamespacedFuncNameNotInUseFunctions(): void
     {
-        $this->setPropertyValue('useFunctions', ['other' => 'Some\\Ns\\other']);
+        $this->setPropertyValue('useFunctions', ['other' => 'Some\Ns\other']);
         $this->assertEquals(
             'my_func',
             $this->compiler->getNamespacedFuncName('my_func')

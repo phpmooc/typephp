@@ -1,8 +1,8 @@
 <?php
 /**
- * This file is part of TypePHP.
+ * This file is part of TypePHP(AOT).
  *
- * @link     https://www.swoole.com/
+ * @link     https://www.swoole.com/aot/
  * @contact  service@swoole.com
  */
 
@@ -40,12 +40,10 @@ trait SourcePipelineTrait
 
     /** @var ?list<string> Zend extension arguments for the build PHP CLI. */
     private ?array $opcodeBuildExtensionArgs = null;
-
     private bool $opcodeBuildChecked = false;
     private string $opcodeBuildProbeError = '';
     private string $opcodeBuildPhpVersion = '';
     private string $opcodeBuildSignature = '';
-
     private ?string $embeddedArchiveFile = null;
 
     private function getOpcodeBuildPhpCli(): string
@@ -164,7 +162,7 @@ trait SourcePipelineTrait
         if (file_exists($destination)) {
             $base = $this->getBuildDir() . '/cache/legacy/' . basename($legacy);
             $destination = $base;
-            for ($suffix = 1; file_exists($destination); ++$suffix) {
+            for ($suffix = 1; file_exists($destination); $suffix++) {
                 $destination = $base . '-' . $suffix;
             }
         }
@@ -280,7 +278,8 @@ trait SourcePipelineTrait
         $progress = new Progressbar();
         $progress->barStyle([AnsiTerminal::FG_GREEN])
             ->percentageStyle([AnsiTerminal::TEXT_BOLD])
-            ->labelStyle([AnsiTerminal::FG_CYAN]);
+            ->labelStyle([AnsiTerminal::FG_CYAN])
+        ;
         $progress->renderInPlace(0, $total, $label);
         return $progress;
     }
@@ -359,10 +358,10 @@ trait SourcePipelineTrait
         $progress = $this->startOpcodeProgress('Opcodes', $batch->pendingCount());
         $blobs = $generator->compile(
             $batch,
-            fn(string $file) => $this->climate->warning(
+            fn (string $file) => $this->climate->warning(
                 'Skipping non-executable embedded PHP file: ' . $file,
             ),
-            fn(int $completed, int $total, string $file) => $this->updateOpcodeProgress(
+            fn (int $completed, int $total, string $file) => $this->updateOpcodeProgress(
                 $progress,
                 'Opcodes',
                 $completed,
@@ -445,7 +444,13 @@ trait SourcePipelineTrait
 
         $this->writeFile(
             $output,
-            (new EmbeddedTableRenderer())->render($embeddedArchive, $phpVersion, $this->isWindows()),
+            (new EmbeddedTableRenderer())->render(
+                $embeddedArchive,
+                $phpVersion,
+                $this->isWindows(),
+                !$this->isSapiBuild(),
+                $this->sapiEntryFile,
+            ),
         );
         $this->generatedProjectSources[$output] = true;
         return $sources;
@@ -504,10 +509,16 @@ trait SourcePipelineTrait
 
     private function validateLoadedProjectConfiguration(): void
     {
-        if ($this->embeddedFiles !== [] && !$this->isBuildModeBin()) {
+        if (in_array('cli', $this->sapiTargets, true) && $this->sapiEntryFile === null) {
+            $this->error('CLI SAPI builds require an `entry` PHP file');
+        }
+        if ($this->sapiEntryFile !== null && !in_array('cli', $this->sapiTargets, true)) {
+            $this->error('`entry` requires the CLI SAPI target');
+        }
+        if ($this->embeddedFiles !== [] && !$this->isBuildModeBin() && !$this->isSapiBuild()) {
             $this->error('`embedded-files` requires `mode: bin`');
         }
-        if ($this->embeddedFiles !== []) {
+        if ($this->embeddedFiles !== [] && !$this->isSapiBuild()) {
             $this->getOpcodeBuildExtensionArgs();
         }
         if ($this->climate->arguments->defined('force')) {
@@ -531,7 +542,7 @@ trait SourcePipelineTrait
         }
         return array_values(array_filter(
             $files,
-            static fn(string $file): bool => realpath($file) !== $generatedStub,
+            static fn (string $file): bool => realpath($file) !== $generatedStub,
         ));
     }
 
@@ -562,6 +573,12 @@ trait SourcePipelineTrait
             return;
         }
 
+        if ($this->isSapiBuild()) {
+            $this->prepareSapiBuildEnvironment();
+            $this->getOpcodeBuildExtensionArgs();
+            return;
+        }
+
         $platform = $this->getPlatform();
         $phpDir = $this->getPhpDir();
         if ($this->isBuildModeEmbed() && $platform instanceof Linux) {
@@ -572,7 +589,7 @@ trait SourcePipelineTrait
             }
         }
 
-        if (!($platform instanceof Wasi)) {
+        if (!$platform instanceof Wasi) {
             $this->validatePhpRuntimeMinimum($phpDir);
         }
 
@@ -601,7 +618,7 @@ trait SourcePipelineTrait
 
         // All Windows build modes depend on the PHPX import library and runtime.
         // Other platforms only run the existing checks in embedded build mode.
-        if (!$this->isNanoMode()
+        if (!$this->isNanoMode() && !$this->isSapiBuild()
             && ($this->isBuildModeEmbed() || $this->getPlatform() instanceof Windows)) {
             foreach ($this->getPlatform()->getBuildLibraryWarnings(
                 $this->getPhpDir(),
@@ -624,6 +641,90 @@ trait SourcePipelineTrait
         }
     }
 
+    /** @param list<string>|null $sourceDependencies */
+    private function prepareSapiBuildEnvironment(?array $sourceDependencies = null): void
+    {
+        try {
+            $composerDependencies = SapiExtensionRequirements::fromEmbeddedVendorFiles(
+                $this->embeddedFiles,
+            );
+            $requiredExtensions = SapiExtensionRequirements::merge(
+                $this->extensionDependencies,
+                $composerDependencies,
+                $sourceDependencies ?? [],
+            );
+        } catch (\Throwable $exception) {
+            $this->error('Unable to read SAPI extension requirements: ' . $exception->getMessage());
+        }
+        if ($this->sapiPhpBuildDirectory !== null
+            && array_diff($requiredExtensions, $this->sapiEnabledExtensions) === []
+        ) {
+            return;
+        }
+        try {
+            $runtime = (new SapiPhpBuilder(
+                $this->getPhpxDir(),
+                fn (string $message) => $this->output($message, 'lightBlue'),
+            ))->prepare(
+                $this->phpVersion,
+                $this->sapiTargets,
+                min(8, max(1, $this->maxJob)),
+                $requiredExtensions,
+            );
+        } catch (\Throwable $exception) {
+            $this->error('Unable to prepare self-contained PHP SAPI runtime: ' . $exception->getMessage());
+        }
+
+        $this->sapiPhpSourceDirectory = $runtime->sourceDirectory;
+        $this->sapiPhpBuildDirectory = $runtime->buildDirectory;
+        $this->sapiPhpPrefix = $runtime->prefix;
+        $this->sapiPhpxArchive = $runtime->phpxArchive;
+        $this->sapiRuntimeArchives = $runtime->sapiArchives;
+        $this->sapiEnabledExtensions = $runtime->enabledExtensions;
+        putenv('PHP_HOME=' . $runtime->prefix);
+        $_ENV['PHP_HOME'] = $runtime->prefix;
+        $this->validatePhpRuntimeMinimum($runtime->prefix);
+        $this->restartSourceCompilerWithSapiPhp($runtime);
+        $this->output(
+            'Using private PHP ' . $runtime->version . ' runtime from ' . $runtime->buildDirectory,
+            'green',
+        );
+    }
+
+    private function restartSourceCompilerWithSapiPhp(SapiPhpBuild $runtime): void
+    {
+        $targetMinor = implode('.', array_slice(explode('.', $runtime->version), 0, 2));
+        $compilerMinor = PHP_MAJOR_VERSION . '.' . PHP_MINOR_VERSION;
+        if ($targetMinor === $compilerMinor || !$this->compilerRuntime->sourceEntry) {
+            // The native tpc executable has no host Zend VM. Its opcode worker
+            // is already the private PHP CLI selected above, so there is no
+            // compiler PHP process to replace.
+            return;
+        }
+        if (getenv('TYPEPHP_SAPI_PHP_VERSION') === $targetMinor) {
+            throw new \RuntimeException("Unable to restart tpc with PHP {$targetMinor}; the restarted process still runs PHP {$compilerMinor}");
+        }
+
+        $script = realpath((string) ($_SERVER['SCRIPT_FILENAME'] ?? ''));
+        $php = $runtime->prefix . '/bin/php';
+        if ($script === false || !is_file($script) || !is_executable($php)) {
+            throw new \RuntimeException("Cannot restart the source compiler with target PHP {$targetMinor}");
+        }
+        global $argv;
+        $arguments = [$php, $script, ...array_slice($argv, 1)];
+        $this->output(
+            "Restarting tpc with PHP {$targetMinor} to match the SAPI runtime and OPcache format",
+            'lightBlue',
+        );
+        putenv('TYPEPHP_SAPI_PHP_VERSION=' . $targetMinor);
+        $_ENV['TYPEPHP_SAPI_PHP_VERSION'] = $targetMinor;
+        $process = proc_open($arguments, [STDIN, STDOUT, STDERR], $pipes, getcwd() ?: null);
+        if (!is_resource($process)) {
+            throw new \RuntimeException("Unable to start target PHP compiler: {$php}");
+        }
+        exit(proc_close($process));
+    }
+
     /** @param list<string> $files @return list<string> */
     private function preprocessProjectFiles(array $files, string $preparedKey): array
     {
@@ -637,6 +738,7 @@ trait SourcePipelineTrait
                     $this->prepareFile($file);
                 } catch (Unsupported $e) {
                     $this->output(' unsupported syntax: ' . $e->getMessage() . "\n" . ' skip: ' . $file . "\n", 'error');
+                    $this->registerUnsupportedSapiFile($file);
                     unset($files[$k]);
                 } catch (SyntaxError $e) {
                     $this->output(' syntax error: ' . $e->getMessage() . "\n" . ' skip: ' . $file . "\n", 'error');
@@ -676,7 +778,7 @@ trait SourcePipelineTrait
             $this->error(
                 "C/C++ compiler executable not found: {$program}\n" .
                 "Configured compiler command: {$compilerCommand}\n" .
-                "Install a supported compiler, or select one with --compiler, or set `cpp-compiler` in project.yml."
+                'Install a supported compiler, or select one with --compiler, or set `cpp-compiler` in project.yml.'
             );
         }
 
@@ -686,7 +788,7 @@ trait SourcePipelineTrait
             $this->error(
                 "Linker executable not found: {$program}\n" .
                 "Configured linker command: {$linkerCommand}\n" .
-                "Install the required linker or update compiler configuration."
+                'Install the required linker or update compiler configuration.'
             );
         }
     }
@@ -773,7 +875,14 @@ trait SourcePipelineTrait
             $this->composeTraitDeclarations($files);
             $previousPhase = $this->enterCompilerPhase(self::PHASE_CONVERT);
             $this->initializeProjectConversion($files);
-            return $this->finalizeProjectConversion($this->convertProjectFiles($files));
+            $conversion = $this->convertProjectFiles($files);
+            if ($this->isSapiBuild()) {
+                // Function and class ownership is known only after lowering all
+                // project bodies. Upgrade the cached PHP runtime before code is
+                // compiled if those bodies introduced another extension.
+                $this->prepareSapiBuildEnvironment($this->resolveExtensionDependencies());
+            }
+            return $this->finalizeProjectConversion($conversion);
         } finally {
             $this->splitTranslationUnitsEnabled = $previousSplitSetting;
             if ($previousPhase !== null) {
@@ -816,7 +925,7 @@ trait SourcePipelineTrait
                 if ($generated === null) {
                     continue;
                 }
-                ++$validSourceCount;
+                $validSourceCount++;
                 array_push($sourceFiles, ...$generated);
             } catch (Unsupported $error) {
                 $this->reportUnsupportedProjectFile($file, $error);
@@ -949,8 +1058,24 @@ trait SourcePipelineTrait
     {
         echo ' unsupported syntax: ' . $error->getMessage() . "\n";
         echo ' skip: ' . $file . "\n";
-        if (in_array($file, $this->embeddedPhpFiles, true)
+        if ($this->isSapiBuild()) {
+            $this->registerUnsupportedSapiFile($file);
+        } elseif (in_array($file, $this->embeddedPhpFiles, true)
             && !in_array($file, $this->embeddedOpcodeFiles, true)) {
+            $this->embeddedOpcodeFiles[] = $file;
+        }
+    }
+
+    private function registerUnsupportedSapiFile(string $file): void
+    {
+        if (!$this->isSapiBuild()) {
+            return;
+        }
+        $file = realpath($file) ?: $file;
+        if (!in_array($file, $this->embeddedPhpFiles, true)) {
+            $this->embeddedPhpFiles[] = $file;
+        }
+        if (!in_array($file, $this->embeddedOpcodeFiles, true)) {
             $this->embeddedOpcodeFiles[] = $file;
         }
     }
@@ -962,7 +1087,8 @@ trait SourcePipelineTrait
         $this->finalizeIncrementalConversionMetadata($files);
         // Trait and interface inputs may emit no standalone translation unit,
         // but at least one supported input must participate in the project.
-        if (!$conversion->hasValidSources()) {
+        if (!$conversion->hasValidSources()
+            && !($this->isSapiBuild() && $this->embeddedOpcodeFiles !== [])) {
             $this->stop('No valid source file found');
         }
 
@@ -974,8 +1100,11 @@ trait SourcePipelineTrait
         $sourceFiles = $conversion->sourceFiles();
         array_push($sourceFiles, ...$this->genClassArrayConstantLifecycleSources());
         $sourceFiles[] = $this->genExtension();
+        if ($this->isSapiBuild()) {
+            $sourceFiles[] = $this->genSapiInternalFunctions();
+        }
         if ($this->isBuildModeEmbed() && !$this->isNanoMode()
-            && ($this->embeddedFiles !== [] || $this->embeddedOpcodeFiles !== [])) {
+            && ($this->isSapiBuild() || $this->embeddedFiles !== [] || $this->embeddedOpcodeFiles !== [])) {
             array_push($sourceFiles, ...$this->genEmbeddedOpcodeTable());
         }
         if ($this->isNanoMode()) {
