@@ -75,6 +75,7 @@ bin/tpc.php app.php --dry --build-dir /tmp/typephp-build
 | `--format` | Run clang-format on the generated code. |
 | `--no-progress` | Do not show the progress bar; output progress per file. |
 | `--no-color` | Disable colored output. |
+| `--proxy <url>` | Use an HTTP(S) or SOCKS proxy for PHP metadata and source archive downloads. |
 
 `-v` / `--version` only displays the version; it is not a verbose option.
 

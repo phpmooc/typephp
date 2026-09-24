@@ -70,7 +70,16 @@ function runCompiler(int $argc, array $argv, CompilerRuntime $runtime): void
 
 function shouldCompileNativeSourceProject(array $argv): bool
 {
-    foreach (array_slice($argv, 1) as $argument) {
+    $arguments = array_slice($argv, 1);
+    for ($i = 0, $count = count($arguments); $i < $count; ++$i) {
+        $argument = $arguments[$i];
+        if ($argument === '--proxy') {
+            ++$i;
+            continue;
+        }
+        if (str_starts_with($argument, '--proxy=')) {
+            continue;
+        }
         if ($argument === '' || $argument[0] === '-') {
             continue;
         }
@@ -93,6 +102,21 @@ function compileNativeSourceProject(array $argv, CompilerRuntime $runtime): void
         $argument = $arguments[$i];
         if ($argument === '--run' || $argument === '-r') {
             $run = true;
+            continue;
+        }
+        if ($argument === '--proxy') {
+            if (!isset($arguments[$i + 1]) || $arguments[$i + 1] === '') {
+                fwrite(STDERR, "Option --proxy requires a URL\n");
+                exit(1);
+            }
+            ++$i;
+            continue;
+        }
+        if (str_starts_with($argument, '--proxy=')) {
+            if (substr($argument, strlen('--proxy=')) === '') {
+                fwrite(STDERR, "Option --proxy requires a URL\n");
+                exit(1);
+            }
             continue;
         }
         if ($argument === '--build-dir') {
@@ -165,6 +189,21 @@ function compileWasmProgram(array $argv, CompilerRuntime $runtime): void
         }
         if ($argument === '--nano') {
             $nano = true;
+            continue;
+        }
+        if ($argument === '--proxy') {
+            if (!isset($arguments[$i + 1]) || $arguments[$i + 1] === '') {
+                fwrite(STDERR, "Option --proxy requires a URL\n");
+                exit(1);
+            }
+            ++$i;
+            continue;
+        }
+        if (str_starts_with($argument, '--proxy=')) {
+            if (substr($argument, strlen('--proxy=')) === '') {
+                fwrite(STDERR, "Option --proxy requires a URL\n");
+                exit(1);
+            }
             continue;
         }
         if (str_starts_with($argument, '--wasm=')) {
@@ -320,7 +359,16 @@ function shouldCompileWasm(array $argv): bool
     }
 
     $workingDirectory = getcwd();
-    foreach (array_slice($argv, 1) as $argument) {
+    $arguments = array_slice($argv, 1);
+    for ($i = 0, $count = count($arguments); $i < $count; ++$i) {
+        $argument = $arguments[$i];
+        if ($argument === '--proxy') {
+            ++$i;
+            continue;
+        }
+        if (str_starts_with($argument, '--proxy=')) {
+            continue;
+        }
         if ($argument === '' || $argument[0] === '-') {
             continue;
         }

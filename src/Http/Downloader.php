@@ -1,4 +1,10 @@
 <?php
+/**
+ * This file is part of TypePHP(AOT).
+ *
+ * @link     https://www.swoole.com/aot/
+ * @contact  service@swoole.com
+ */
 
 namespace TypePhp\Http;
 
@@ -94,7 +100,7 @@ final class Downloader
         $host = (string) ($parts['host'] ?? '');
         if (!in_array($scheme, ['http', 'tcp'], true) || $host === '') {
             throw new \RuntimeException(
-                "Proxy {$this->proxy} requires curl; the PHP stream fallback supports only HTTP proxies",
+                'The configured proxy requires curl; the PHP stream fallback supports only HTTP proxies',
             );
         }
         $port = (int) ($parts['port'] ?? 80);
@@ -123,7 +129,7 @@ final class Downloader
     {
         $process = proc_open($command, [STDIN, STDOUT, STDERR], $pipes);
         if (!is_resource($process) || proc_close($process) !== 0) {
-            throw new \RuntimeException('Command failed: ' . implode(' ', $command));
+            throw new \RuntimeException('Download command failed');
         }
     }
 
@@ -132,14 +138,18 @@ final class Downloader
     {
         $process = proc_open($command, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
         if (!is_resource($process)) {
-            throw new \RuntimeException('Unable to run command: ' . implode(' ', $command));
+            throw new \RuntimeException('Unable to start download command');
         }
         $stdout = stream_get_contents($pipes[1]);
         $stderr = stream_get_contents($pipes[2]);
         fclose($pipes[1]);
         fclose($pipes[2]);
         if (proc_close($process) !== 0) {
-            throw new \RuntimeException(trim($stderr));
+            $message = trim($stderr);
+            if ($this->proxy !== null) {
+                $message = str_replace($this->proxy, '[proxy]', $message);
+            }
+            throw new \RuntimeException($message);
         }
         return $stdout;
     }

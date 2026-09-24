@@ -693,6 +693,7 @@ bin/tpc.php --wasm=browser app.php
 | `--build-dir <dir>` | 生成 C++ 与中间产物的目录 |
 | `--dry` | 只生成 C++，跳过编译与链接 |
 | `--php-version <8.4\|8.5>` | 接受的 PHP 语法版本 |
+| `--proxy <url>` | 下载 PHP 元数据和源码归档时使用的代理 |
 | `--cxx-std <ver>` | C++ 标准（如 `c++17`、`c++20`） |
 | `--march <arch>` | 目标指令集（如 `native`） |
 | `--target-platform <triple>` | 交叉编译目标 triple |

@@ -761,6 +761,7 @@ Key options:
 | `--build-dir <dir>` | Directory for generated C++ and intermediates |
 | `--dry` | Generate C++ only, skip compile and link |
 | `--php-version <8.4\|8.5>` | PHP syntax version to accept |
+| `--proxy <url>` | Proxy used for PHP metadata and source archive downloads |
 | `--cxx-std <ver>` | C++ standard (e.g. `c++17`, `c++20`) |
 | `--march <arch>` | Target instruction set (e.g. `native`) |
 | `--target-platform <triple>` | Cross-compilation target triple |

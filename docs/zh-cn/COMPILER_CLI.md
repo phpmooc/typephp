@@ -75,6 +75,7 @@ bin/tpc.php app.php --dry --build-dir /tmp/typephp-build
 | `--format` | 对生成代码运行 clang-format。 |
 | `--no-progress` | 不显示进度条，逐文件输出进度。 |
 | `--no-color` | 禁用彩色输出。 |
+| `--proxy <url>` | 下载 PHP 元数据和源码归档时使用 HTTP(S) 或 SOCKS 代理。 |
 
 `-v` / `--version` 只显示版本，不是 verbose 选项。
 
