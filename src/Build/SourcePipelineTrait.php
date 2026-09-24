@@ -13,7 +13,7 @@ use Ajaxray\AnsiKit\Components\Progressbar;
 use TypePhp\Backend\CompilerFactory;
 use TypePhp\Exception\SyntaxError;
 use TypePhp\Exception\Unsupported;
-use TypePhp\Installer\LibPhpInstaller;
+use TypePhp\Installer\InteractiveConsole;
 use TypePhp\Installer\LibPhpxInstaller;
 use TypePhp\Platform\Linux;
 use TypePhp\Platform\Wasi;
@@ -509,11 +509,20 @@ trait SourcePipelineTrait
 
     private function validateLoadedProjectConfiguration(): void
     {
-        if (in_array('cli', $this->sapiTargets, true) && $this->sapiEntryFile === null) {
-            $this->error('CLI SAPI builds require an `entry` PHP file');
+        if ($this->sapiConfigured && !$this->isBuildModeBin()) {
+            $this->error('`sapi` is only supported with `mode: bin`');
         }
-        if ($this->sapiEntryFile !== null && !in_array('cli', $this->sapiTargets, true)) {
-            $this->error('`entry` requires the CLI SAPI target');
+        if ($this->isPhpBuilderBuild() && !$this->isBuildModeBin()) {
+            $this->error('`php-builder` is only supported with `mode: bin`');
+        }
+        if ($this->isSapiBuild() && !$this->isPhpBuilderBuild()) {
+            $this->error('The cli and fpm SAPIs require `php-builder`');
+        }
+        if ($this->hasSapi('cli') && $this->sapiEntryFile === null) {
+            $this->error('`sapi` containing cli requires an `entry` PHP file');
+        }
+        if ($this->sapiEntryFile !== null && !$this->hasSapi('cli')) {
+            $this->error('`entry` requires `sapi` to contain cli');
         }
         if ($this->embeddedFiles !== [] && !$this->isBuildModeBin() && !$this->isSapiBuild()) {
             $this->error('`embedded-files` requires `mode: bin`');
@@ -573,21 +582,16 @@ trait SourcePipelineTrait
             return;
         }
 
-        if ($this->isSapiBuild()) {
-            $this->prepareSapiBuildEnvironment();
+        $this->offerPhpBuilderForMissingEmbedRuntime();
+
+        if ($this->isPhpBuilderBuild()) {
+            $this->preparePhpBuilderEnvironment();
             $this->getOpcodeBuildExtensionArgs();
             return;
         }
 
         $platform = $this->getPlatform();
         $phpDir = $this->getPhpDir();
-        if ($this->isBuildModeEmbed() && $platform instanceof Linux) {
-            try {
-                $phpDir = (new LibPhpInstaller(proxy: $this->downloadProxy))->ensure($phpDir) ?? $phpDir;
-            } catch (\Throwable $e) {
-                $this->error('Unable to install libphp.so: ' . $e->getMessage());
-            }
-        }
 
         if (!$platform instanceof Wasi) {
             $this->validatePhpRuntimeMinimum($phpDir);
@@ -611,6 +615,43 @@ trait SourcePipelineTrait
         }
     }
 
+    private function offerPhpBuilderForMissingEmbedRuntime(): void
+    {
+        if ($this->isPhpBuilderBuild()
+            || !$this->isBuildModeBin()
+            || !$this->hasSapi('embed')
+            || (PHP_OS_FAMILY !== 'Linux' && PHP_OS_FAMILY !== 'Darwin')
+        ) {
+            return;
+        }
+
+        try {
+            $this->getPlatform()->detectPhpLibs($this->getPhpDir());
+            return;
+        } catch (\RuntimeException $exception) {
+            $detail = $exception->getMessage();
+        }
+
+        $console = new InteractiveConsole();
+        if (!$console->isInteractive()) {
+            $this->error(
+                "The host PHP embed library is missing: {$detail}. "
+                . 'Run tpc in an interactive terminal to enable php-builder, or pass '
+                . "--php-builder='extensions: []; zts: off'",
+            );
+        }
+
+        $console->write('The host PHP installation does not provide an Embed SAPI library.');
+        if (!$console->confirm('Build a private PHP runtime from php-src with php-builder?', true)) {
+            $this->error('The embed SAPI requires a host libphp library or `php-builder`');
+        }
+
+        $this->phpBuilderEnabled = true;
+        $this->phpBuilderZts = false;
+        $this->phpBuilderExtensions = [];
+        $console->write('php-builder enabled; required extensions will be collected automatically.');
+    }
+
     private function reportBuildLibraryWarnings(): void
     {
         // shell_exec and define are already called directly via php::fn::, so no
@@ -618,7 +659,7 @@ trait SourcePipelineTrait
 
         // All Windows build modes depend on the PHPX import library and runtime.
         // Other platforms only run the existing checks in embedded build mode.
-        if (!$this->isNanoMode() && !$this->isSapiBuild()
+        if (!$this->isNanoMode() && !$this->isPhpBuilderBuild()
             && ($this->isBuildModeEmbed() || $this->getPlatform() instanceof Windows)) {
             foreach ($this->getPlatform()->getBuildLibraryWarnings(
                 $this->getPhpDir(),
@@ -642,13 +683,14 @@ trait SourcePipelineTrait
     }
 
     /** @param list<string>|null $sourceDependencies */
-    private function prepareSapiBuildEnvironment(?array $sourceDependencies = null): void
+    private function preparePhpBuilderEnvironment(?array $sourceDependencies = null): void
     {
         try {
             $composerDependencies = SapiExtensionRequirements::fromEmbeddedVendorFiles(
                 $this->embeddedFiles,
             );
             $requiredExtensions = SapiExtensionRequirements::merge(
+                $this->phpBuilderExtensions,
                 $this->extensionDependencies,
                 $composerDependencies,
                 $sourceDependencies ?? [],
@@ -671,6 +713,7 @@ trait SourcePipelineTrait
                 $this->sapiTargets,
                 min(8, max(1, $this->maxJob)),
                 $requiredExtensions,
+                $this->phpBuilderZts,
             );
         } catch (\Throwable $exception) {
             $this->error('Unable to prepare self-contained PHP SAPI runtime: ' . $exception->getMessage());
@@ -682,6 +725,7 @@ trait SourcePipelineTrait
         $this->sapiPhpxArchive = $runtime->phpxArchive;
         $this->sapiRuntimeArchives = $runtime->sapiArchives;
         $this->sapiEnabledExtensions = $runtime->enabledExtensions;
+        $this->isPhpZts = $this->phpBuilderZts;
         putenv('PHP_HOME=' . $runtime->prefix);
         $_ENV['PHP_HOME'] = $runtime->prefix;
         $this->validatePhpRuntimeMinimum($runtime->prefix);
@@ -877,11 +921,11 @@ trait SourcePipelineTrait
             $previousPhase = $this->enterCompilerPhase(self::PHASE_CONVERT);
             $this->initializeProjectConversion($files);
             $conversion = $this->convertProjectFiles($files);
-            if ($this->isSapiBuild()) {
+            if ($this->isPhpBuilderBuild()) {
                 // Function and class ownership is known only after lowering all
                 // project bodies. Upgrade the cached PHP runtime before code is
                 // compiled if those bodies introduced another extension.
-                $this->prepareSapiBuildEnvironment($this->resolveExtensionDependencies());
+                $this->preparePhpBuilderEnvironment($this->resolveExtensionDependencies());
             }
             return $this->finalizeProjectConversion($conversion);
         } finally {

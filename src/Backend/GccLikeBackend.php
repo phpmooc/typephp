@@ -292,6 +292,9 @@ abstract class GccLikeBackend extends CompilerBackend
         if (!empty($options['libraries'])) {
             $cmd .= ' ' . $this->formatLibraries($options['libraries']);
         }
+        if (!empty($options['post_ldflags'])) {
+            $cmd .= ' ' . $options['post_ldflags'];
+        }
 
         return $cmd;
     }

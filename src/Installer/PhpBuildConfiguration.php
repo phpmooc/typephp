@@ -159,13 +159,19 @@ final class PhpBuildConfiguration
      * @param list<string> $targets
      * @return list<string>
      */
-    public static function deriveSapi(string|array $configureOptions, string $prefix, array $targets): array
+    public static function derivePhpBuilder(
+        string|array $configureOptions,
+        string $prefix,
+        array $targets,
+        bool $zts,
+    ): array
     {
         $replace = [
             '--prefix', '--with-config-file-path', '--with-config-file-scan-dir',
             '--enable-cli', '--disable-cli', '--enable-fpm', '--disable-fpm',
             '--enable-cgi', '--disable-cgi', '--enable-phpdbg', '--disable-phpdbg',
             '--enable-embed', '--disable-embed', '--enable-opcache', '--disable-opcache',
+            '--enable-zts', '--disable-zts',
             '--with-pear', '--without-pear',
         ];
         $drop = ['--with-apxs', '--with-apxs2', '--with-fpm-systemd', ...self::PREFIX_DERIVED];
@@ -194,7 +200,8 @@ final class PhpBuildConfiguration
             in_array('fpm', $targets, true) ? '--enable-fpm' : '--disable-fpm',
             '--disable-cgi',
             '--disable-phpdbg',
-            '--disable-embed',
+            in_array('embed', $targets, true) ? '--enable-embed=static' : '--disable-embed',
+            $zts ? '--enable-zts' : '--disable-zts',
             '--enable-opcache',
             '--without-pear',
             ...$result,

@@ -374,7 +374,6 @@ class CompilerBase implements PropertyAccessContext
     public const string BUILD_MODE_BIN = 'bin';
     public const string BUILD_MODE_EXT = 'ext';
     public const string BUILD_MODE_LIB = 'lib';
-    public const string BUILD_MODE_SAPI = 'sapi';
     public const string ENTRY_FUNCTION = 'main';
     protected const string PHASE_IDLE = 'idle';
     protected const string PHASE_PREPARE = 'prepare';
@@ -552,8 +551,17 @@ class CompilerBase implements PropertyAccessContext
     /** Generate a VM-less program entry for the Composer php-nano runtime. */
     protected bool $nanoMode = false;
 
+    protected bool $phpBuilderEnabled = false;
+
     /** @var list<string> */
-    protected array $sapiTargets = [];
+    protected array $sapiTargets = ['embed'];
+
+    protected bool $sapiConfigured = false;
+
+    protected bool $phpBuilderZts = false;
+
+    /** @var list<string> */
+    protected array $phpBuilderExtensions = [];
 
     /** Absolute path of the embedded primary script used by the CLI SAPI. */
     protected ?string $sapiEntryFile = null;
@@ -970,19 +978,24 @@ class CompilerBase implements PropertyAccessContext
         return $this->buildMode === self::BUILD_MODE_LIB;
     }
 
-    public function isBuildModeSapi(): bool
-    {
-        return $this->buildMode === self::BUILD_MODE_SAPI;
-    }
-
     public function isBuildModeEmbed(): bool
     {
-        return $this->isBuildModeBin() || $this->isBuildModeLib() || $this->isBuildModeSapi();
+        return $this->isBuildModeBin() || $this->isBuildModeLib();
+    }
+
+    public function isPhpBuilderBuild(): bool
+    {
+        return $this->phpBuilderEnabled;
+    }
+
+    public function hasSapi(string $sapi): bool
+    {
+        return in_array($sapi, $this->sapiTargets, true);
     }
 
     public function isSapiBuild(): bool
     {
-        return $this->sapiTargets !== [];
+        return $this->hasSapi('cli') || $this->hasSapi('fpm');
     }
 
     /** @return list<string> */

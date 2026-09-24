@@ -190,11 +190,11 @@ php bin/tpc.php --help
 embed 安装前缀；在类 Unix 系统中，该目录应包含 `bin/php-config`、PHP 头文件和
 `lib/libphp.so`。
 
-### 构建 `libphp.so`
+### PHP 运行时选择
 
-二进制和共享库构建需要 PHP 的 `embed` SAPI。如果 Linux 上缺少 `libphp.so`，
-`tpc.php` 可以交互式下载 PHP 源码并自动构建。PHP 扩展构建从宿主 SAPI 解析 Zend
-符号，不能再加载第二份 `libphp`。详见[自动构建 libphp.so](docs/zh-cn/LIBPHP_INSTALLER.md)。
+二进制模式默认使用 Embed SAPI 和宿主机 `libphp`。找不到该库时，交互式构建会询问
+是否启用 `php-builder`，从 php-src 构建私有静态运行时。CLI 和 FPM 目标始终要求
+启用 `php-builder`。详见 [PHP builder](docs/zh-cn/LIBPHP_INSTALLER.md)。
 
 ## 快速开始
 
@@ -687,13 +687,15 @@ bin/tpc.php --wasm=browser app.php
 | `-d`, `--debug` | 调试构建，带符号和源码跟踪 |
 | `-o`, `--output <file>` | 输出文件名 |
 | `-m`, `--mode <bin\|lib\|ext>` | 构建模式（默认 `bin`） |
+| `--sapi <embed\|cli\|fpm>` | 二进制使用的 SAPI（默认 `embed`，支持逗号分隔多个值） |
+| `--php-builder <配置>` | 从 php-src 构建私有 PHP 运行时 |
 | `-r`, `--run` | 构建成功后运行 |
 | `-j`, `--job <num>` | 并行编译任务数（默认 `4`） |
 | `-f`, `--force` | 不使用缓存，重新编译可复用 PHPX 对象 |
 | `--build-dir <dir>` | 生成 C++ 与中间产物的目录 |
 | `--dry` | 只生成 C++，跳过编译与链接 |
 | `--php-version <8.4\|8.5>` | 接受的 PHP 语法版本 |
-| `--proxy <url>` | 下载 PHP 元数据和源码归档时使用的代理 |
+| `--proxy <url>` | 所有网络传输使用的代理 |
 | `--cxx-std <ver>` | C++ 标准（如 `c++17`、`c++20`） |
 | `--march <arch>` | 目标指令集（如 `native`） |
 | `--target-platform <triple>` | 交叉编译目标 triple |
@@ -714,8 +716,9 @@ source <(./tpc --generate-completion=bash)
 
 ## 常见问题
 
-- **缺少 `libphp.so` / `libphp.dylib`：** 安装或编译与当前 PHP 匹配的 embed SAPI，设置
-  `PHP_HOME`，或使用 `bin/tpc.php` 在 Linux 上提供的交互式安装流程。
+- **缺少 `libphp.so` / `libphp.dylib`：** 安装匹配的 Embed SAPI、设置 `PHP_HOME`、
+  接受交互式 `php-builder` 提示，或在非交互构建中传入
+  `--php-builder='extensions: []; zts: off'`。
 - **找不到 PHPX：** 将 `PHPX_HOME` 指向包含 `include/` 和
   `lib/libphpx.so`（或对应平台文件）的 PHPX 安装目录，并在编译项目前先构建 PHPX。
 - **启动崩溃或出现 ABI 错误：** PHP 头文件、`php-config`、`libphp` 和扩展 ABI

@@ -32,6 +32,7 @@ use TypePhp\Build\NanoSourceComposer;
 use TypePhp\Build\NativeBuilder;
 use TypePhp\Build\NativeCommandOptionsTrait;
 use TypePhp\Build\NativeDependencyAuditor;
+use TypePhp\Build\PhpBuilderConfiguration;
 use TypePhp\Build\PhpSourceExtensionIndex;
 use TypePhp\Build\PrecompiledHeaderManager;
 use TypePhp\Build\ResourceCompilationTrait;
@@ -437,7 +438,8 @@ class Translator extends Preprocessor
             ['-o, --output <file>', 'Output name or path (default: input basename)'],
             ['-f, --force', 'Clear incremental caches and force a full rebuild'],
             ['-m, --mode <mode>', 'Build mode: bin, lib, or ext (default: bin)'],
-            ['--sapi <target>', 'Build a self-contained PHP CLI, FPM, or both'],
+            ['--sapi <target>', 'PHP SAPI target: embed (default), CLI, and/or FPM'],
+            ['--php-builder <config>', 'Build a private PHP runtime from source'],
             ['-r, --run', 'Run the compiled binary after a successful build'],
             ['-j, --job <num>', 'Number of parallel compilation jobs (default: 4)'],
             ['--cxx-std <ver>', 'C++ standard version (default: c++17)'],
@@ -450,7 +452,7 @@ class Translator extends Preprocessor
             ['--lto', 'Enable Link Time Optimization (-flto)'],
             ['--no-literal-strings', 'Disable literal string optimization'],
             ['--php-version <ver>', 'Accepted PHP language version (8.4-8.5, default: 8.5)'],
-            ['--proxy <url>', 'Proxy URL used for file downloads'],
+            ['--proxy <url>', 'Proxy URL used for network transfers'],
             ['--no-progress', 'Print one compilation line per file instead of a progress bar'],
             ['--no-console', 'Hide the console window (Windows GUI applications only)'],
             ['--sanitize <type>', 'Enable a sanitizer such as address or undefined'],
@@ -511,6 +513,15 @@ class Translator extends Preprocessor
         }
         if ($this->climate->arguments->defined('sapi')) {
             $this->configureSapiTargets((string) $this->climate->arguments->get('sapi'));
+        }
+        if ($this->climate->arguments->defined('php-builder')) {
+            try {
+                $this->configurePhpBuilder(PhpBuilderConfiguration::fromCommandLine(
+                    (string) $this->climate->arguments->get('php-builder'),
+                ));
+            } catch (\InvalidArgumentException $exception) {
+                $this->error($exception->getMessage());
+            }
         }
 
         // --full-static links the whole musl C runtime into the artifact, so it
@@ -894,21 +905,17 @@ class Translator extends Preprocessor
     {
         $mode = strtolower(trim($mode));
         $mode = match ($mode) {
-            'binary', 'cli' => self::BUILD_MODE_BIN,
+            'binary' => self::BUILD_MODE_BIN,
             'extension' => self::BUILD_MODE_EXT,
             'library', 'shared', 'dll', 'dylib', 'so' => self::BUILD_MODE_LIB,
-            'sapi' => self::BUILD_MODE_SAPI,
             default => $mode,
         };
 
-        if (!in_array($mode, [self::BUILD_MODE_BIN, self::BUILD_MODE_EXT, self::BUILD_MODE_LIB, self::BUILD_MODE_SAPI], true)) {
-            $this->error("Invalid build mode `{$mode}`. Expected bin, lib, ext, or sapi.");
+        if (!in_array($mode, [self::BUILD_MODE_BIN, self::BUILD_MODE_EXT, self::BUILD_MODE_LIB], true)) {
+            $this->error("Invalid build mode `{$mode}`. Expected bin, lib, or ext.");
         }
 
         $this->buildMode = $mode;
-        if ($mode === self::BUILD_MODE_SAPI && $this->sapiTargets === []) {
-            $this->sapiTargets = ['cli'];
-        }
     }
 
     public function setTargetName(string $name): void
@@ -1285,9 +1292,9 @@ class Translator extends Preprocessor
 
     private function doGenExtension(): string
     {
-        if ($this->isBuildModeBin()) {
+        if ($this->isBuildModeBin() && $this->hasSapi('embed')) {
             if (!$this->hasFunction(self::ENTRY_FUNCTION)) {
-                $this->climate->red('When the build mode is a binary executable file, the `main()` function must be defined');
+                $this->climate->red('The Embed SAPI requires a global `main()` function');
                 exit(1);
             }
         }
@@ -1320,7 +1327,9 @@ class Translator extends Preprocessor
 
         if ($this->isSapiBuild()) {
             $code .= '#include <typephp_opcode_table.h>' . PHP_EOL;
-        } elseif ($this->isBuildModeEmbed() && !$this->isNanoMode()) {
+        }
+        if ($this->isBuildModeEmbed() && !$this->isNanoMode()
+            && (!$this->isSapiBuild() || $this->hasSapi('embed'))) {
             $code .= '#include <typephp_runtime.h>' . PHP_EOL;
             if ($this->embeddedFiles === [] && $this->embeddedOpcodeFiles === []) {
                 // The runtime still calls these hooks; keep empty builds in this translation unit.
@@ -1553,16 +1562,18 @@ CODE;
         $traitMetadata = $this->genTraitMetadataCode();
         $code .= $traitMetadata['declarations'];
 
-        $code .= "// clang-format off\n";
-        $code .= "static const zend_function_entry ext_functions[] = {\n";
+        $processTitleFunctions = '';
         if (!$this->isNanoMode()
             && $this->isBuildModeBin()
             && !$this->isWasiTarget()
             && !$this->isIosTarget()) {
-            $code .= $this->getIndent() . "PHP_FE(cli_set_process_title,        arginfo_cli_set_process_title)\n";
-            $code .= $this->getIndent() . "PHP_FE(cli_get_process_title,        arginfo_cli_get_process_title)\n";
+            $processTitleFunctions .= $this->getIndent()
+                . "PHP_FE(cli_set_process_title,        arginfo_cli_set_process_title)\n";
+            $processTitleFunctions .= $this->getIndent()
+                . "PHP_FE(cli_get_process_title,        arginfo_cli_get_process_title)\n";
         }
 
+        $projectFunctions = '';
         foreach ($this->symbols->functions() as $functionDef) {
             if ($functionDef->attributeFactory) {
                 continue;
@@ -1580,11 +1591,25 @@ CODE;
             $zifName = $this->escapeZendFnName($fullName);
             // TypePHP is always strict. Store the flag in the registered
             // zend_function instead of rewriting shared metadata on every call.
-            $code .= $this->getIndent() . 'ZEND_RAW_FENTRY("' . $this->escapeString($fullName)
+            $projectFunctions .= $this->getIndent() . 'ZEND_RAW_FENTRY("' . $this->escapeString($fullName)
                 . '", ZEND_FN(' . $zifName . '), arginfo_' . $zifName
                 . ', ZEND_ACC_STRICT_TYPES, NULL, NULL)' . PHP_EOL;
         }
+        $code .= "// clang-format off\n";
+        $code .= "static const zend_function_entry ext_functions[] = {\n";
+        $code .= $processTitleFunctions;
+        $code .= $projectFunctions;
         $code .= $this->getIndent() . "ZEND_FE_END\n};\n// clang-format on" . PHP_EOL . PHP_EOL;
+        if ($this->isSapiBuild() && $processTitleFunctions !== '') {
+            // PHP CLI already registers these functions, while FPM does not
+            // provide their implementation. The SAPI module therefore uses a
+            // table containing project functions only. Embed keeps the
+            // original process-title API through ext_functions.
+            $code .= "// clang-format off\n";
+            $code .= "static const zend_function_entry sapi_ext_functions[] = {\n";
+            $code .= $projectFunctions;
+            $code .= $this->getIndent() . "ZEND_FE_END\n};\n// clang-format on" . PHP_EOL . PHP_EOL;
+        }
 
         // minit begin
         $releaseAstConstantFns = array_unique($this->releaseAstConstantFns);
@@ -1767,6 +1792,28 @@ CODE;
         foreach ($this->nativeStaticInitializers as $name => $_) {
             $code .= $this->escapeGlobalVar($name) . ' = false;' . PHP_EOL;
         }
+        if ($this->isBuildModeBin() && (!$this->isSapiBuild() || $this->hasSapi('embed'))) {
+            // Embed registers the generated module after request startup and
+            // unloads that temporary module before Zend tears down class
+            // statics. Release only static array caches which may retain
+            // Reflection objects pointing into the temporary module. This is
+            // deliberately skipped for ext/CLI/FPM request shutdown.
+            $code .= 'if (strcmp(sapi_module.name, "embed") == 0) {' . PHP_EOL;
+            foreach ($this->symbols->classes() as $classDef) {
+                if ($classDef->trait) {
+                    continue;
+                }
+                foreach ($classDef->properties as $property) {
+                    if (!$property->isStatic() || !$property->arrayInitPlan) {
+                        continue;
+                    }
+                    $code .= $this->getIndent(2) . 'php::setStaticProperty('
+                        . $this->genCharPtr($classDef->getNamespacedName(false), true) . ', '
+                        . $this->genCharPtr($property->name) . ', php::Array{});' . PHP_EOL;
+                }
+            }
+            $code .= '}' . PHP_EOL;
+        }
         $code .= $this->genRequestArrayDefaultCleanup();
         foreach ($this->constants as $name => $const) {
             if ($const->type !== Type::VAR) {
@@ -1811,7 +1858,10 @@ CODE;
         }
         $code .= 'module_init();' . PHP_EOL;
 
-        if ($this->isBuildModeBin() && !$this->isNanoMode()) {
+        if ($this->isBuildModeBin() && $this->hasSapi('embed') && !$this->isNanoMode()) {
+            if ($this->isSapiBuild()) {
+                $code .= 'if (strcmp(sapi_module.name, "embed") == 0) {' . PHP_EOL;
+            }
             $entryFunction = $this->symbols->function(self::ENTRY_FUNCTION);
             if ($this->isNanoPolicyMode()) {
                 // Windows keeps the complete PHP/PHPX DLL runtime, but a Nano
@@ -1848,6 +1898,9 @@ CODE;
                 }
 
                 $code .= 'php::eval(' . $entryScriptArg . ', ' . $entryFileArg . ');' . PHP_EOL;
+            }
+            if ($this->isSapiBuild()) {
+                $code .= '}' . PHP_EOL;
             }
         }
 
@@ -1922,19 +1975,39 @@ zend_module_entry {$moduleName}_module_entry = {
 };
 CODE;
         $code .= PHP_EOL . PHP_EOL;
+        if ($this->isSapiBuild() && $processTitleFunctions !== '') {
+            $code .= <<<CODE
+zend_module_entry {$moduleName}_sapi_module_entry = {
+{$moduleHeader}
+    "{$moduleName}",
+    sapi_ext_functions,
+    PHP_MINIT({$moduleName}),
+    PHP_MSHUTDOWN({$moduleName}),
+    PHP_RINIT({$moduleName}),
+    PHP_RSHUTDOWN({$moduleName}),
+    {$moduleInfoFunction},
+    {$moduleVersion},
+    STANDARD_MODULE_PROPERTIES,
+};
+CODE;
+            $code .= PHP_EOL . PHP_EOL;
+        }
 
         if ($this->isBuildModeExt()) {
             $code .= "ZEND_GET_MODULE({$moduleName});\n";
             $code .= '}  // namespace ' . $projectNamespace . PHP_EOL;
-        } elseif ($this->isBuildModeSapi()) {
-            $code .= '}  // namespace ' . $projectNamespace . PHP_EOL . PHP_EOL;
-            $code .= 'extern "C" zend_module_entry *' . $this->getSapiModulePointerName()
-                . ' = &' . $projectNamespace . '::' . $moduleName . '_module_entry;' . PHP_EOL;
         } elseif ($this->isBuildModeEmbed() && !$this->isNanoMode()) {
             $code .= '}  // namespace ' . $projectNamespace . PHP_EOL . PHP_EOL;
-            $code .= 'TYPEPHP_EMBED_GET_MODULE_FUNCTION(' . $this->targetName . ') {' . PHP_EOL;
-            $code .= $this->getIndent() . 'return &' . $projectNamespace . '::' . $moduleName . '_module_entry;' . PHP_EOL;
-            $code .= '}' . PHP_EOL;
+            if ($this->isSapiBuild()) {
+                $code .= 'extern "C" zend_module_entry *' . $this->getSapiModulePointerName()
+                    . ' = &' . $projectNamespace . '::' . $moduleName
+                    . ($processTitleFunctions !== '' ? '_sapi' : '') . '_module_entry;' . PHP_EOL;
+            }
+            if (!$this->isSapiBuild() || $this->hasSapi('embed')) {
+                $code .= 'TYPEPHP_EMBED_GET_MODULE_FUNCTION(' . $this->targetName . ') {' . PHP_EOL;
+                $code .= $this->getIndent() . 'return &' . $projectNamespace . '::' . $moduleName . '_module_entry;' . PHP_EOL;
+                $code .= '}' . PHP_EOL;
+            }
         } else {
             $code .= '}  // namespace ' . $projectNamespace . PHP_EOL;
         }
@@ -1960,7 +2033,7 @@ CODE;
     {
         $dependencies = $this->extensionDependencies;
         $seen = [];
-        $sourceIndex = $this->isSapiBuild() && $this->sapiPhpSourceDirectory !== null
+        $sourceIndex = $this->isPhpBuilderBuild() && $this->sapiPhpSourceDirectory !== null
             ? PhpSourceExtensionIndex::forSource($this->sapiPhpSourceDirectory)
             : null;
         foreach ($dependencies as $dependency) {
@@ -2413,7 +2486,7 @@ CODE;
             array_push($sourceFiles, ...$this->getEmbeddedRuntimeSources());
         }
 
-        if ($this->isBuildModeBin()
+        if (($this->isBuildModeBin() || $this->hasSapi('embed'))
             && !$this->isWasiTarget()
             && !$this->isIosTarget()) {
             $sourceFiles[] = $this->getPhpxDir() . '/src/misc/php_cli_process_title.c';
@@ -2426,7 +2499,7 @@ CODE;
     private function getEmbeddedRuntimeSources(): array
     {
         $sources = [];
-        if (!$this->isSapiBuild()) {
+        if (!$this->isSapiBuild() || $this->hasSapi('embed')) {
             $runtimeSource = $this->getPhpxDir() . '/src/misc/typephp_runtime.cc';
             // PHPX 2.6.3 keeps the common runtime in typephp_main.cc. Newer PHPX
             // versions split it out so the object can be shared across projects.
@@ -2803,31 +2876,66 @@ CODE;
 
     public function build(array $objectFiles): string
     {
-        if ($this->isSapiBuild()) {
+        if ($this->isPhpBuilderBuild()) {
             if ($this->sapiPhpSourceDirectory === null
                 || $this->sapiPhpBuildDirectory === null
                 || $this->sapiPhpxArchive === null
                 || $this->sapiRuntimeArchives === []) {
-                throw new \LogicException('SAPI runtime was not prepared before linking');
+                throw new \LogicException('PHP builder runtime was not prepared before linking');
             }
-            try {
-                $target = (new SapiApplicationLinker(
-                    $this->sapiPhpSourceDirectory,
-                    $this->sapiPhpBuildDirectory,
-                    $this->sapiPhpxArchive,
-                    $this->sapiRuntimeArchives,
-                    $this->getBuildDir(),
-                    $this->sapiTargets,
-                    $this->sapiEntryFile,
-                    fn (string $message) => $this->output($message, 'lightBlue'),
-                ))->link($objectFiles, $this->getSapiOutputFiles());
-            } catch (\Throwable $exception) {
-                $this->error('SAPI link failed: ' . $exception->getMessage());
+            $outputs = $this->getSapiOutputFiles();
+            $mainObject = $this->getObjectFile($this->getPhpxDir() . '/src/misc/typephp_main.cc');
+            $runtimeObject = $this->getObjectFile($this->getPhpxDir() . '/src/misc/typephp_runtime.cc');
+            $sapiObject = $this->getObjectFile($this->getPhpxDir() . '/src/misc/typephp_sapi.cc');
+            $processTitleObject = $this->getObjectFile(
+                $this->getPhpxDir() . '/src/misc/php_cli_process_title.c',
+            );
+            $psTitleObject = $this->getObjectFile($this->getPhpxDir() . '/src/misc/ps_title.c');
+            $internalFunctionsObject = $this->getObjectFile(
+                $this->getBuildDir() . '/sapi-internal-functions-' . $this->targetName . '.c',
+            );
+
+            if ($this->isSapiBuild()) {
+                $sapiTargets = array_values(array_intersect($this->sapiTargets, ['cli', 'fpm']));
+                $sapiObjects = array_values(array_diff(
+                    $objectFiles,
+                    [$mainObject, $runtimeObject, $processTitleObject, $psTitleObject],
+                ));
+                try {
+                    (new SapiApplicationLinker(
+                        $this->sapiPhpSourceDirectory,
+                        $this->sapiPhpBuildDirectory,
+                        $this->sapiPhpxArchive,
+                        $this->sapiRuntimeArchives,
+                        $this->getBuildDir(),
+                        $sapiTargets,
+                        $this->sapiEntryFile,
+                        fn (string $message) => $this->output($message, 'lightBlue'),
+                    ))->link($sapiObjects, $outputs);
+                } catch (\Throwable $exception) {
+                    $this->error('PHP builder SAPI link failed: ' . $exception->getMessage());
+                }
             }
-            $this->climate->green('Build successful: ' . $target);
+            if ($this->hasSapi('embed')) {
+                $embedObjects = array_values(array_diff(
+                    $objectFiles,
+                    [$sapiObject, $internalFunctionsObject],
+                ));
+                $this->linkNativeTarget($embedObjects, $outputs['embed']);
+            }
+
+            $runnableTargets = array_values(array_intersect($this->sapiTargets, ['embed', 'cli']));
+            $primaryTarget = $runnableTargets[0] ?? $this->sapiTargets[0];
+            $target = $outputs[$primaryTarget];
+            $this->climate->green('Build successful: ' . implode(', ', $outputs));
             return $target;
         }
-        $targetFile = $this->getTargetFileName();
+        return $this->linkNativeTarget($objectFiles, $this->getTargetFileName());
+    }
+
+    /** @param list<string> $objectFiles */
+    private function linkNativeTarget(array $objectFiles, string $targetFile): string
+    {
 
         // Windows: add the .res resource file to the link
         if ($this->isWindows() && $this->hasResourceFile()) {
@@ -2936,8 +3044,10 @@ CODE;
 
     public function run(string $targetFile): never
     {
-        if ($this->isSapiBuild() && !in_array('cli', $this->sapiTargets, true)) {
-            $this->climate->error('--run requires the CLI target in SAPI mode');
+        if ($this->isPhpBuilderBuild()
+            && !$this->hasSapi('embed')
+            && !$this->hasSapi('cli')) {
+            $this->climate->error('--run requires an embed or CLI target in `sapi`');
             exit(1);
         }
         if ($this->buildMode !== self::BUILD_MODE_BIN && !$this->isSapiBuild()) {
@@ -4177,6 +4287,13 @@ CODE;
         if (array_key_exists('sapi', $cfg) && !$this->climate->arguments->defined('sapi')) {
             $this->configureSapiTargets($cfg['sapi']);
         }
+        if (array_key_exists('php-builder', $cfg) && !$this->climate->arguments->defined('php-builder')) {
+            try {
+                $this->configurePhpBuilder(PhpBuilderConfiguration::fromYaml($cfg['php-builder']));
+            } catch (\InvalidArgumentException $exception) {
+                $this->error($exception->getMessage());
+            }
+        }
         if (array_key_exists('entry', $cfg)) {
             if (!is_string($cfg['entry']) || trim($cfg['entry']) === '') {
                 $this->error('`entry` must be a non-empty PHP file path');
@@ -4477,9 +4594,6 @@ CODE;
         $buildMode = $cfg['mode'] ?? $cfg['build-mode'] ?? $cfg['type'] ?? null;
         if (!empty($buildMode)) {
             $normalizedMode = strtolower(trim((string) $buildMode));
-            if ($this->isSapiBuild() && $normalizedMode !== self::BUILD_MODE_SAPI) {
-                $this->error('`sapi` is an independent build mode and cannot be combined with `mode`');
-            }
             $this->setBuildMode($normalizedMode);
         }
 
@@ -4558,16 +4672,23 @@ CODE;
         return $list;
     }
 
+    private function configurePhpBuilder(PhpBuilderConfiguration $configuration): void
+    {
+        $this->phpBuilderEnabled = true;
+        $this->phpBuilderZts = $configuration->zts;
+        $this->phpBuilderExtensions = $configuration->extensions;
+        // The SAPI executable owns main(). Generated TypePHP code is linked as
+        // an internal Zend module and therefore has no dynamic get_module().
+    }
+
     private function configureSapiTargets(string|array $value): void
     {
         try {
             $this->sapiTargets = SapiBuildConfiguration::parseTargets($value);
+            $this->sapiConfigured = true;
         } catch (\InvalidArgumentException $exception) {
             $this->error($exception->getMessage());
         }
-        // The SAPI executable owns main(). Generated TypePHP code is linked as
-        // an internal Zend module and therefore has no dynamic get_module().
-        $this->buildMode = self::BUILD_MODE_SAPI;
     }
 
     /** @return list<string> */

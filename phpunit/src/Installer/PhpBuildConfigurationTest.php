@@ -140,7 +140,7 @@ final class PhpBuildConfigurationTest extends TestCase
 
     public function testSapiDerivationBuildsStaticCliAndSelectedFpm(): void
     {
-        $options = PhpBuildConfiguration::deriveSapi(
+        $options = PhpBuildConfiguration::derivePhpBuilder(
             [
                 '--prefix=/usr',
                 '--enable-embed=shared',
@@ -151,17 +151,29 @@ final class PhpBuildConfigurationTest extends TestCase
             ],
             '/tmp/typephp-sapi',
             ['cli', 'fpm'],
+            true,
         );
 
         self::assertContains('--prefix=/tmp/typephp-sapi', $options);
         self::assertContains('--enable-cli', $options);
         self::assertContains('--enable-fpm', $options);
+        self::assertContains('--enable-zts', $options);
         self::assertContains('--enable-opcache', $options);
         self::assertContains('--with-curl', $options);
         self::assertContains('--without-pear', $options);
         self::assertNotContains('--enable-embed=shared', $options);
         self::assertNotContains('--enable-opcache=shared', $options);
         self::assertNotContains('--with-curl=shared', $options);
+    }
+
+    public function testPhpBuilderDerivationBuildsStaticEmbedWithoutZts(): void
+    {
+        $options = PhpBuildConfiguration::derivePhpBuilder([], '/tmp/typephp-embed', ['embed'], false);
+
+        self::assertContains('--enable-embed=static', $options);
+        self::assertContains('--enable-cli', $options);
+        self::assertContains('--disable-fpm', $options);
+        self::assertContains('--disable-zts', $options);
     }
 
     public function testParseShellWordsRejectsIncompleteInput(): void

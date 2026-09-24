@@ -179,7 +179,7 @@ class Constants
         ],
         'proxy' => [
             'longPrefix' => 'proxy',
-            'description' => 'Proxy URL used for file downloads (HTTP(S) or SOCKS)',
+            'description' => 'Proxy URL used for network transfers (HTTP(S) or SOCKS)',
             'required' => false,
         ],
         'force' => [
@@ -192,13 +192,18 @@ class Constants
         'mode' => [
             'longPrefix' => 'mode',
             'prefix' => 'm',
-            'description' => 'Build mode: bin, lib, ext, or sapi; default: bin',
+            'description' => 'Build mode: bin, lib, or ext; default: bin',
             'required' => false,
             'defaultValue' => CompilerBase::BUILD_MODE_BIN,
         ],
+        'php-builder' => [
+            'longPrefix' => 'php-builder',
+            'description' => 'Build PHP from source, e.g. "extensions: [curl]; zts: on"',
+            'required' => false,
+        ],
         'sapi' => [
             'longPrefix' => 'sapi',
-            'description' => 'Build a self-contained PHP application SAPI: cli, fpm, or both',
+            'description' => 'PHP SAPI target: embed, cli, fpm, or a comma-separated list',
             'required' => false,
         ],
         'run' => [

@@ -17,20 +17,16 @@ final class SapiBuildConfiguration
                 throw new \InvalidArgumentException('`sapi` entries must be non-empty strings');
             }
             $target = strtolower(trim($target));
-            if ($target === 'both') {
-                array_push($targets, 'cli', 'fpm');
-                continue;
-            }
-            if (!in_array($target, ['cli', 'fpm'], true)) {
+            if (!in_array($target, ['embed', 'cli', 'fpm'], true)) {
                 throw new \InvalidArgumentException(
-                    "Invalid SAPI target `{$target}`. Expected cli, fpm, or both.",
+                    "Invalid SAPI target `{$target}`. Expected embed, cli, or fpm.",
                 );
             }
             $targets[] = $target;
         }
         $targets = array_values(array_unique($targets));
         if ($targets === []) {
-            throw new \InvalidArgumentException('`sapi` must select cli, fpm, or both');
+            throw new \InvalidArgumentException('`sapi` must select embed, cli, or fpm');
         }
         return $targets;
     }

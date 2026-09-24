@@ -27,6 +27,8 @@ function runCompiler(int $argc, array $argv, CompilerRuntime $runtime): void
         require_once dirname(__DIR__) . '/vendor/autoload.php';
     }
 
+    configureProxyEnvironment($argv);
+
     $completionStatus = CompletionCommand::execute($argv);
     if ($completionStatus !== null) {
         if ($completionStatus !== 0) {
@@ -66,6 +68,43 @@ function runCompiler(int $argc, array $argv, CompilerRuntime $runtime): void
     }
 
     (new ProjectBuildRunner(Translator::getInstance($runtime)))->run($argv);
+}
+
+/**
+ * Export an explicit CLI proxy for every network-capable child process. The
+ * downloader still receives the value directly so credentials can be redacted
+ * from its diagnostics, while tools such as package managers inherit the
+ * conventional proxy variables from the compiler process.
+ */
+function configureProxyEnvironment(array $argv): void
+{
+    $proxy = null;
+    for ($i = 1, $count = count($argv); $i < $count; ++$i) {
+        $argument = $argv[$i];
+        if ($argument === '--proxy') {
+            if (!isset($argv[$i + 1]) || trim($argv[$i + 1]) === '') {
+                fwrite(STDERR, "Option --proxy requires a URL\n");
+                exit(1);
+            }
+            $proxy = trim($argv[++$i]);
+            continue;
+        }
+        if (str_starts_with($argument, '--proxy=')) {
+            $proxy = trim(substr($argument, strlen('--proxy=')));
+            if ($proxy === '') {
+                fwrite(STDERR, "Option --proxy requires a URL\n");
+                exit(1);
+            }
+        }
+    }
+
+    if ($proxy === null) {
+        return;
+    }
+    foreach (['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy'] as $name) {
+        putenv($name . '=' . $proxy);
+        $_ENV[$name] = $proxy;
+    }
 }
 
 function shouldCompileNativeSourceProject(array $argv): bool

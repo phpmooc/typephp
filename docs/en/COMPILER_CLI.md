@@ -67,6 +67,8 @@ bin/tpc.php app.php --dry --build-dir /tmp/typephp-build
 | `-d`, `--debug` | Debug build; disables optimization and adds debug symbols and TypePHP source tracking. |
 | `-o`, `--output <file>` | Output file name. |
 | `-m`, `--mode <bin|lib|ext>` | Build mode, default `bin`. |
+| `--sapi <embed|cli|fpm>` | SAPI used by a `bin` target; accepts a comma-separated list. Default: `embed`. |
+| `--php-builder <config>` | Build PHP from php-src, for example `--php-builder='extensions: [swoole, mongodb]; zts: on'`. |
 | `-r`, `--run` | Run after a successful build. |
 | `-j`, `--job <num>` | Number of parallel compilation jobs, default `4`. |
 | `-f`, `--force` | Ignore the phpx misc object cache and force recompilation. |
@@ -75,9 +77,31 @@ bin/tpc.php app.php --dry --build-dir /tmp/typephp-build
 | `--format` | Run clang-format on the generated code. |
 | `--no-progress` | Do not show the progress bar; output progress per file. |
 | `--no-color` | Disable colored output. |
-| `--proxy <url>` | Use an HTTP(S) or SOCKS proxy for PHP metadata and source archive downloads. |
+| `--proxy <url>` | Use an HTTP(S) or SOCKS proxy for network transfers. |
 
 `-v` / `--version` only displays the version; it is not a verbose option.
+
+`mode` describes the artifact type, while `sapi` describes the PHP process
+interface. `cli` and `fpm` are not build modes. They require `php-builder`;
+`embed` can use either the host `libphp` (the default) or a private static PHP
+runtime. When the default Embed build cannot find the host library, an
+interactive invocation offers to enable `php-builder`. In CI, pass the option
+explicitly.
+
+The equivalent YAML is:
+
+```yaml
+mode: bin
+sapi: [cli, fpm, embed]
+php-builder:
+  extensions: [swoole, mongodb]
+  zts: on
+```
+
+`php-builder` does not depend on the host PHP runtime or modify the downloaded
+php-src tree. It collects extension requirements from project sources, YAML,
+and Composer metadata, then configures a private static runtime using libraries
+provided by the operating system.
 
 ## Target and Toolchain
 

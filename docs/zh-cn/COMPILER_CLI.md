@@ -67,6 +67,8 @@ bin/tpc.php app.php --dry --build-dir /tmp/typephp-build
 | `-d`, `--debug` | 调试构建；关闭优化、增加调试符号和 TypePHP 源码跟踪。 |
 | `-o`, `--output <file>` | 输出文件名。 |
 | `-m`, `--mode <bin|lib|ext>` | 构建模式，默认 `bin`。 |
+| `--sapi <embed|cli|fpm>` | `bin` 目标使用的 SAPI，支持逗号分隔的多个值；默认 `embed`。 |
+| `--php-builder <配置>` | 从 php-src 构建 PHP，例如 `--php-builder='extensions: [swoole, mongodb]; zts: on'`。 |
 | `-r`, `--run` | 构建成功后运行。 |
 | `-j`, `--job <num>` | 并行编译任务数，默认 `4`。 |
 | `-f`, `--force` | 忽略 phpx misc 对象缓存，强制重新编译。 |
@@ -75,9 +77,28 @@ bin/tpc.php app.php --dry --build-dir /tmp/typephp-build
 | `--format` | 对生成代码运行 clang-format。 |
 | `--no-progress` | 不显示进度条，逐文件输出进度。 |
 | `--no-color` | 禁用彩色输出。 |
-| `--proxy <url>` | 下载 PHP 元数据和源码归档时使用 HTTP(S) 或 SOCKS 代理。 |
+| `--proxy <url>` | 所有网络传输使用 HTTP(S) 或 SOCKS 代理。 |
 
 `-v` / `--version` 只显示版本，不是 verbose 选项。
+
+`mode` 表达产物类型，`sapi` 表达 PHP 进程接口；`cli` 和 `fpm` 不是构建模式。
+两者都强依赖 `php-builder`。`embed` 既可使用默认的宿主机 `libphp`，也可使用
+私有的静态 PHP 运行时。当默认 Embed 构建找不到宿主库时，交互式运行会询问是否启用
+`php-builder`；CI 中应显式传入该选项。
+
+等价的 YAML 配置为：
+
+```yaml
+mode: bin
+sapi: [cli, fpm, embed]
+php-builder:
+  extensions: [swoole, mongodb]
+  zts: on
+```
+
+`php-builder` 不依赖宿主机 PHP 运行时，也不会修改下载的 php-src 原始目录。它会从
+项目源码、YAML 和 Composer 元数据收集扩展依赖，自动生成 configure 参数，并使用
+操作系统提供的底层库构建私有静态运行时。
 
 ## 目标和工具链
 

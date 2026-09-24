@@ -32,29 +32,38 @@ final class SapiPhpBuilder
         array $targets,
         int $jobs,
         array $requiredExtensions = [],
+        bool $zts = false,
     ): SapiPhpBuild {
         if (PHP_OS_FAMILY !== 'Linux' && PHP_OS_FAMILY !== 'Darwin') {
             throw new \RuntimeException('Self-contained SAPI builds currently require Linux or macOS');
         }
-        if ($targets === [] || array_diff($targets, ['cli', 'fpm']) !== []) {
-            throw new \InvalidArgumentException('SAPI targets must contain cli, fpm, or both');
+        if ($targets === [] || array_diff($targets, ['embed', 'cli', 'fpm']) !== []) {
+            throw new \InvalidArgumentException('PHP builder SAPI targets must contain embed, cli, or fpm');
         }
-        $source = (new OfficialPhpSource(
+        $officialSource = (new OfficialPhpSource(
             OfficialPhpSource::defaultCacheDirectory(),
             $this->output,
             $this->proxy,
         ))->prepare($phpVersion);
+        $preparedSource = (new PhpBuilderSource(
+            OfficialPhpSource::defaultCacheDirectory(),
+            $this->output,
+            $this->proxy,
+        ))->prepare($officialSource, $requiredExtensions);
+        $source = $preparedSource['source'];
+        $externalExtensions = $preparedSource['external'];
         $sourceVersion = OfficialPhpSource::version($source);
         $baseOptions = $this->sourceConfigureOptions($source);
         $requiredExtensions = SapiExtensionRequirements::merge($requiredExtensions);
         $extensionOptions = SapiExtensionConfiguration::configureOptions($source, $requiredExtensions);
-        // Build both official executable SAPIs once. Individual projects can
-        // then select either archive without configuring or compiling php-src.
-        $runtimeTargets = ['cli', 'fpm'];
+        $runtimeTargets = array_values(array_unique($targets));
+        sort($runtimeTargets, SORT_STRING);
         $identity = [
             $sourceVersion,
             $baseOptions,
             $runtimeTargets,
+            $zts,
+            $externalExtensions,
             PHP_OS_FAMILY,
             php_uname('m'),
             getenv('CC') ?: '',
@@ -62,7 +71,7 @@ final class SapiPhpBuilder
             filemtime($source . '/configure'),
         ];
         $compatibility = hash('sha256', json_encode($identity, JSON_THROW_ON_ERROR));
-        $cacheDirectory = OfficialPhpSource::defaultCacheDirectory() . '/sapi';
+        $cacheDirectory = OfficialPhpSource::defaultCacheDirectory() . '/php-builder';
         $cached = $this->findCompatibleRuntime(
             $cacheDirectory,
             $sourceVersion,
@@ -84,7 +93,7 @@ final class SapiPhpBuilder
         $this->mkdir($root);
         $lock = fopen($root . '/build.lock', 'c+');
         if ($lock === false || !flock($lock, LOCK_EX)) {
-            throw new \RuntimeException("Unable to lock SAPI runtime cache: {$root}");
+            throw new \RuntimeException("Unable to lock PHP builder runtime cache: {$root}");
         }
         try {
             $build = $root . '/build';
@@ -92,29 +101,33 @@ final class SapiPhpBuilder
             $this->mkdir($build);
             $this->mkdir($prefix . '/lib/conf.d');
 
-            $options = PhpBuildConfiguration::deriveSapi(
+            $options = PhpBuildConfiguration::derivePhpBuilder(
                 [...$baseOptions, ...$extensionOptions],
                 $prefix,
                 $runtimeTargets,
+                $zts,
             );
             $configured = $build . '/.typephp-configure.json';
             $configuration = json_encode($options, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
             if (!is_file($build . '/Makefile') || @file_get_contents($configured) !== $configuration) {
-                ($this->output)('Configuring private PHP ' . $sourceVersion . ' SAPI runtime');
+                ($this->output)('Configuring PHP ' . $sourceVersion . ' source runtime');
                 $this->run([$source . '/configure', ...$options], $build);
                 AtomicFile::write($configured, $configuration);
             }
 
             $php = $prefix . '/bin/php';
             $fpm = $prefix . '/sbin/php-fpm';
-            $needsInstall = !is_executable($php) || !is_executable($fpm);
+            $embed = $prefix . '/lib/libphp.a';
+            $needsInstall = !is_executable($php)
+                || (in_array('fpm', $runtimeTargets, true) && !is_executable($fpm))
+                || (in_array('embed', $runtimeTargets, true) && !is_file($embed));
             if ($needsInstall) {
                 ($this->output)('Building private PHP runtime (cached across application builds)');
                 $this->run(['make', '-j' . max(1, $jobs)], $build);
                 $this->run(['make', 'install'], $build);
             }
 
-            $sapiArchives = $this->buildSapiArchives($build, $root, $jobs);
+            $sapiArchives = $this->buildSapiArchives($build, $root, $jobs, $runtimeTargets, $embed);
 
             $phpxBuild = $root . '/phpx-build';
             $phpxArchive = $phpxBuild . '/lib/libphpx.a';
@@ -142,10 +155,13 @@ final class SapiPhpBuilder
             }
             AtomicFile::write($root . '/runtime.json', json_encode([
                 'version' => $sourceVersion,
+                'source' => $source,
                 'compatibility' => $compatibility,
                 'requested_extensions' => $requiredExtensions,
                 'enabled_extensions' => $enabledExtensions,
                 'configure_options' => $options,
+                'sapis' => $runtimeTargets,
+                'zts' => $zts,
             ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) . PHP_EOL);
             return new SapiPhpBuild(
                 $source,
@@ -185,7 +201,7 @@ final class SapiPhpBuilder
             if (array_diff($requiredExtensions, $enabled) !== []) {
                 continue;
             }
-            $runtime = $this->runtimeFromRoot($root, $sourceVersion, $enabled);
+            $runtime = $this->runtimeFromRoot($root, $sourceVersion, $enabled, $requiredExtensions);
             if ($runtime !== null) {
                 $matches[] = [$runtime, count($enabled), filemtime($manifest) ?: 0];
             }
@@ -199,23 +215,37 @@ final class SapiPhpBuilder
         string $root,
         string $version,
         array $enabledExtensions,
+        array $requiredExtensions,
     ): ?SapiPhpBuild {
         $build = $root . '/build';
         $prefix = $root . '/install';
         $phpxArchive = $root . '/phpx-build/lib/libphpx.a';
-        $archives = [
-            'cli' => $root . '/lib/libphp-cli.a',
-            'fpm' => $root . '/lib/libphp-fpm.a',
-        ];
+        $metadata = json_decode((string) @file_get_contents($root . '/runtime.json'), true);
+        $targets = is_array($metadata) && is_array($metadata['sapis'] ?? null)
+            ? $metadata['sapis']
+            : ['cli', 'fpm'];
+        $archives = [];
+        foreach ($targets as $target) {
+            if ($target === 'embed') {
+                $archives['embed'] = $prefix . '/lib/libphp.a';
+            } elseif ($target === 'cli' || $target === 'fpm') {
+                $archives[$target] = $root . '/lib/libphp-' . $target . '.a';
+            }
+        }
         if (!is_executable($prefix . '/bin/php')
             || !is_file($phpxArchive)
-            || !is_file($archives['cli'])
-            || !is_file($archives['fpm'])
+            || array_diff($requiredExtensions, $enabledExtensions) !== []
+            || array_filter($archives, static fn (string $archive): bool => !is_file($archive)) !== []
             || !is_file($build . '/Makefile')
         ) {
             return null;
         }
-        $source = OfficialPhpSource::defaultCacheDirectory() . '/src/php-' . $version;
+        $source = is_array($metadata) && is_string($metadata['source'] ?? null)
+            ? $metadata['source']
+            : OfficialPhpSource::defaultCacheDirectory() . '/src/php-' . $version;
+        if (!is_dir($source)) {
+            return null;
+        }
         return new SapiPhpBuild(
             $source,
             $build,
@@ -251,15 +281,24 @@ final class SapiPhpBuilder
     }
 
     /** @return array<string, string> */
-    private function buildSapiArchives(string $build, string $root, int $jobs): array
+    private function buildSapiArchives(
+        string $build,
+        string $root,
+        int $jobs,
+        array $targets,
+        string $embedArchive,
+    ): array
     {
         $libraryDirectory = $root . '/lib';
         $this->mkdir($libraryDirectory);
-        $archives = [
-            'cli' => $libraryDirectory . '/libphp-cli.a',
-            'fpm' => $libraryDirectory . '/libphp-fpm.a',
-        ];
-        if (is_file($archives['cli']) && is_file($archives['fpm'])) {
+        $archives = [];
+        foreach (array_intersect($targets, ['cli', 'fpm']) as $target) {
+            $archives[$target] = $libraryDirectory . '/libphp-' . $target . '.a';
+        }
+        if (in_array('embed', $targets, true)) {
+            $archives['embed'] = $embedArchive;
+        }
+        if (array_filter($archives, static fn (string $archive): bool => !is_file($archive)) === []) {
             return $archives;
         }
         // The normal PHP build creates every core and SAPI object. Archive
@@ -273,6 +312,9 @@ final class SapiPhpBuilder
             'cli' => ['PHP_CLI_OBJS', 'sapi/cli/php_cli.lo'],
             'fpm' => ['PHP_FPM_OBJS', 'sapi/fpm/fpm/fpm_main.lo'],
         ] as $target => [$variable, $entryObject]) {
+            if (!isset($archives[$target])) {
+                continue;
+            }
             if (is_file($archives[$target])) {
                 continue;
             }
@@ -288,6 +330,9 @@ final class SapiPhpBuilder
                 @unlink($temporary);
                 throw new \RuntimeException('Unable to store PHP SAPI archive: ' . $archives[$target]);
             }
+        }
+        if (isset($archives['embed']) && !is_file($archives['embed'])) {
+            throw new \RuntimeException('PHP Embed static archive was not installed: ' . $archives['embed']);
         }
         return $archives;
     }

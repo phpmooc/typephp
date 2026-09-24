@@ -214,13 +214,12 @@ php bin/tpc.php --help
 may point to the PHP embed prefix; it must contain `bin/php-config`, PHP headers,
 and `lib/libphp.so` on Unix-like systems.
 
-### Building `libphp.so`
+### PHP runtime selection
 
-Binary and shared-library builds require PHP's `embed` SAPI. If `libphp.so` is
-missing on Linux, `tpc.php` can interactively download the PHP source and build
-it for you. A PHP extension build resolves Zend symbols from the host SAPI and
-must not load a second `libphp`. See
-[Automatic libphp.so build](docs/en/LIBPHP_INSTALLER.md).
+Binary mode uses the Embed SAPI and the host `libphp` by default. If that library
+is missing, an interactive build offers to enable `php-builder`, which builds a
+private static runtime from php-src. CLI and FPM targets always require
+`php-builder`. See [PHP builder](docs/en/LIBPHP_INSTALLER.md).
 
 ## Quick Start
 
@@ -755,13 +754,15 @@ Key options:
 | `-d`, `--debug` | Debug build with symbols and source tracking |
 | `-o`, `--output <file>` | Output file name |
 | `-m`, `--mode <bin\|lib\|ext>` | Build mode (default `bin`) |
+| `--sapi <embed\|cli\|fpm>` | Binary SAPI target (default `embed`; comma-separated lists accepted) |
+| `--php-builder <config>` | Build a private PHP runtime from php-src |
 | `-r`, `--run` | Run after a successful build |
 | `-j`, `--job <num>` | Parallel compile jobs (default `4`) |
 | `-f`, `--force` | Rebuild reusable PHPX objects instead of using the cache |
 | `--build-dir <dir>` | Directory for generated C++ and intermediates |
 | `--dry` | Generate C++ only, skip compile and link |
 | `--php-version <8.4\|8.5>` | PHP syntax version to accept |
-| `--proxy <url>` | Proxy used for PHP metadata and source archive downloads |
+| `--proxy <url>` | Proxy used for network transfers |
 | `--cxx-std <ver>` | C++ standard (e.g. `c++17`, `c++20`) |
 | `--march <arch>` | Target instruction set (e.g. `native`) |
 | `--target-platform <triple>` | Cross-compilation target triple |
@@ -782,8 +783,9 @@ source <(./tpc --generate-completion=bash)
 
 ## Troubleshooting
 
-- **`libphp.so` / `libphp.dylib` is missing:** install/build the matching PHP embed SAPI, set
-  `PHP_HOME`, or let `bin/tpc.php` offer the interactive Linux installer.
+- **`libphp.so` / `libphp.dylib` is missing:** install the matching Embed SAPI,
+  set `PHP_HOME`, accept the interactive `php-builder` prompt, or pass
+  `--php-builder='extensions: []; zts: off'` in non-interactive builds.
 - **PHPX cannot be found:** set `PHPX_HOME` to a PHPX installation containing
   `include/` and `lib/libphpx.so` (or the platform equivalent), then build PHPX
   before compiling the project.

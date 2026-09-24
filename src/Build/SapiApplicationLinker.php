@@ -96,6 +96,13 @@ final class SapiApplicationLinker
                 $arguments[] = 'cli';
             } else {
                 $arguments[] = 'PHP_FPM_OBJS=' . $this->onlyEntryObjects($fpmObjects, ['fpm_main.lo'])
+                    // The shared generated object also contains the Embed-only
+                    // process-title function table. FPM does not register that
+                    // table, but the linker must still resolve its callbacks.
+                    . ' ' . $this->onlyEntryObjects(
+                        $cliObjects,
+                        ['ps_title.lo', 'php_cli_process_title.lo'],
+                    )
                     . ' ' . $runtimeArchive;
                 $arguments[] = 'SAPI_FPM_PATH=' . $linkOutput;
                 $arguments[] = 'fpm';

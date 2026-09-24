@@ -9,6 +9,7 @@
 namespace TypePhp\Tests;
 
 use PHPUnit\Framework\TestCase;
+use TypePhp\Build\PhpBuilderConfiguration;
 use TypePhp\CompilerBase;
 use TypePhp\CompilerTest;
 use TypePhp\Exception\TestError;
@@ -250,8 +251,15 @@ PHP);
         $this->compiler->setBuildMode('extension');
         $this->assertSame(CompilerBase::BUILD_MODE_EXT, $this->compiler->getBuildMode());
 
-        $this->compiler->setBuildMode('cli');
+        $this->compiler->setBuildMode('binary');
         $this->assertSame(CompilerBase::BUILD_MODE_BIN, $this->compiler->getBuildMode());
+    }
+
+    public function testCliIsNotAcceptedAsABuildMode(): void
+    {
+        $this->expectException(TestError::class);
+        $this->expectExceptionMessage('Invalid build mode `cli`. Expected bin, lib, or ext.');
+        $this->compiler->setBuildMode('cli');
     }
 
     public function testPhpLanguageVersionControlsParser(): void
@@ -908,13 +916,14 @@ YAML, 'myproject.yml', 'examples/tetris-sdl');
         );
     }
 
-    public function testBothSapiTargetsHaveExplicitTargetSuffixes(): void
+    public function testMultipleSapiTargetsHaveExplicitTargetSuffixes(): void
     {
         $this->compiler->setOutputPath($this->testDir . '/build/app');
-        $this->invokeMethod('configureSapiTargets', 'both');
+        $this->invokeMethod('configureSapiTargets', ['embed', 'cli', 'fpm']);
 
         $this->assertSame(
             [
+                'embed' => $this->testDir . '/build/app-embed',
                 'cli' => $this->testDir . '/build/app-cli',
                 'fpm' => $this->testDir . '/build/app-fpm',
             ],
@@ -922,17 +931,72 @@ YAML, 'myproject.yml', 'examples/tetris-sdl');
         );
     }
 
-    public function testSapiBuildModeDefaultsToCliTarget(): void
+    public function testCombinedSapiModuleKeepsEmbedOnlyFunctionsOutOfCliAndFpm(): void
     {
-        $this->compiler->setBuildMode(CompilerBase::BUILD_MODE_SAPI);
+        global $translator;
+        $compiler = CompilerTest::create(TYPEPHP_ROOT_PATH);
+        $translator = $compiler;
+        $compiler->setTargetName('combined_sapi');
+        $configureSapi = new \ReflectionMethod($compiler, 'configureSapiTargets');
+        $configureSapi->invoke($compiler, ['embed', 'cli', 'fpm']);
+        $testFile = TYPEPHP_ROOT_PATH . '/phpunit/code/compiler_api/extension_clean_maps.php';
+        $compiler->addFiles([$testFile]);
+        $compiler->prepareFile($testFile);
+        $compiler->convertFile($testFile);
 
-        $this->assertSame(['cli'], $this->compiler->getSapiTargets());
-        $this->assertTrue($this->compiler->isSapiBuild());
+        $extension = (string) file_get_contents($compiler->genExtension());
+        self::assertStringContainsString('static const zend_function_entry ext_functions[]', $extension);
+        self::assertStringContainsString('static const zend_function_entry sapi_ext_functions[]', $extension);
+        self::assertSame(1, substr_count($extension, 'PHP_FE(cli_set_process_title'));
+        self::assertStringContainsString('_sapi_module_entry;', $extension);
+        self::assertStringContainsString('if (strcmp(sapi_module.name, "embed") == 0)', $extension);
     }
 
-    public function testSapiCliEntryIsEmbeddedAndExcludedFromAotSources(): void
+    public function testPhpBuilderUsesDefaultEmbedSapi(): void
+    {
+        $this->invokeMethod('configurePhpBuilder', PhpBuilderConfiguration::fromYaml([]));
+
+        $this->assertSame(['embed'], $this->compiler->getSapiTargets());
+        $this->assertTrue($this->compiler->isPhpBuilderBuild());
+        $this->assertFalse($this->compiler->isSapiBuild());
+        $this->assertTrue($this->compiler->isBuildModeBin());
+    }
+
+    public function testCliSapiRequiresPhpBuilder(): void
+    {
+        $this->invokeMethod('configureSapiTargets', 'fpm');
+
+        $this->expectException(TestError::class);
+        $this->expectExceptionMessage('The cli and fpm SAPIs require `php-builder`');
+        $this->invokeMethod('validateLoadedProjectConfiguration');
+    }
+
+    public function testSapiOptionIsOnlyValidForBinaryMode(): void
+    {
+        $this->compiler->setBuildMode('lib');
+        $this->invokeMethod('configureSapiTargets', 'embed');
+
+        $this->expectException(TestError::class);
+        $this->expectExceptionMessage('`sapi` is only supported with `mode: bin`');
+        $this->invokeMethod('validateLoadedProjectConfiguration');
+    }
+
+    public function testPhpBuilderIsOnlyValidForBinaryMode(): void
+    {
+        $this->compiler->setBuildMode('ext');
+        $this->invokeMethod('configurePhpBuilder', PhpBuilderConfiguration::fromYaml([]));
+
+        $this->expectException(TestError::class);
+        $this->expectExceptionMessage('`php-builder` is only supported with `mode: bin`');
+        $this->invokeMethod('validateLoadedProjectConfiguration');
+    }
+
+    public function testPhpBuilderCliEntryIsEmbeddedAndExcludedFromAotSources(): void
     {
         $projectFile = $this->createProjectFile(<<<'YAML'
+php-builder:
+  zts: on
+  extensions: []
 sapi: cli
 entry: main.php
 sources:
@@ -949,9 +1013,10 @@ YAML);
         $this->invokeMethod('validateLoadedProjectConfiguration');
     }
 
-    public function testSapiCliRequiresEntry(): void
+    public function testPhpBuilderCliRequiresEntry(): void
     {
         $projectFile = $this->createProjectFile(<<<'YAML'
+php-builder: {}
 sapi: cli
 sources:
   - main.php
@@ -959,13 +1024,14 @@ YAML);
         $this->invokeMethod('parseProjectYaml', $projectFile);
 
         $this->expectException(TestError::class);
-        $this->expectExceptionMessage('CLI SAPI builds require an `entry` PHP file');
+        $this->expectExceptionMessage('`sapi` containing cli requires an `entry` PHP file');
         $this->invokeMethod('validateLoadedProjectConfiguration');
     }
 
-    public function testSapiFpmDoesNotRequireCliEntry(): void
+    public function testPhpBuilderFpmDoesNotRequireCliEntry(): void
     {
         $projectFile = $this->createProjectFile(<<<'YAML'
+php-builder: {}
 sapi: fpm
 sources:
   - main.php
@@ -974,6 +1040,25 @@ YAML);
 
         $this->invokeMethod('validateLoadedProjectConfiguration');
         $this->assertSame(['fpm'], $this->compiler->getSapiTargets());
+    }
+
+    public function testPhpBuilderFpmDoesNotRequireCompiledMainFunction(): void
+    {
+        global $translator;
+        $compiler = CompilerTest::create($this->testDir);
+        $translator = $compiler;
+        $compiler->setTargetName('fpm_without_main');
+        $configureSapi = new \ReflectionMethod($compiler, 'configureSapiTargets');
+        $configureSapi->invoke($compiler, 'fpm');
+        $source = $this->testDir . '/fpm-source.php';
+        file_put_contents($source, "<?php\nfunction request_handler(): string { return 'ok'; }\n");
+        $compiler->addFiles([$source]);
+        $compiler->prepareFile($source);
+        $compiler->convertFile($source);
+
+        $extension = (string) file_get_contents($compiler->genExtension());
+        self::assertStringContainsString('sapi_ext_functions', $extension);
+        self::assertStringNotContainsString('php::eval(', $extension);
     }
 
     public function testProjectWithoutAotSourcesUsesRuntimeDeclarationHeader(): void
@@ -1590,7 +1675,26 @@ YAML);
             $this->assertIsInt($moduleInitStart, $mode);
             $this->assertIsInt($moduleCleanStart, $mode);
             $moduleInit = substr($extension, $moduleInitStart, $moduleCleanStart - $moduleInitStart);
+            $moduleClean = substr($extension, $moduleCleanStart);
             $this->assertStringNotContainsString('slot.reset()', $moduleInit, $mode);
+            if ($mode === CompilerBase::BUILD_MODE_BIN) {
+                $this->assertStringContainsString(
+                    'if (strcmp(sapi_module.name, "embed") == 0)',
+                    $moduleClean,
+                    $mode,
+                );
+                $this->assertStringContainsString(
+                    'php::setStaticProperty("RequestStaticCache", "values", php::Array{});',
+                    $moduleClean,
+                    $mode,
+                );
+            } else {
+                $this->assertStringNotContainsString(
+                    'if (strcmp(sapi_module.name, "embed") == 0)',
+                    $moduleClean,
+                    $mode,
+                );
+            }
             $this->assertMatchesRegularExpression(
                 '/PHP_RSHUTDOWN_FUNCTION\([^)]*\)\s*\{\s*'
                     . 'php::request_shutdown\(\);\s*'
@@ -1751,6 +1855,9 @@ YAML);
         $extension = file_get_contents($extensionFile);
         $this->assertStringContainsString('php::Str php_exported_defaults_arg_0_default_value() {', $extension);
         $this->assertStringContainsString('static php::Str _literal_strings[]', $extension);
+        $this->assertStringNotContainsString('_literal_string_values', $extension);
+        $this->assertStringNotContainsString('ZVAL_STRINGL(_literal_strings[', $extension);
+        $this->assertStringNotContainsString('ZVAL_NULL(_literal_strings[', $extension);
         $this->assertStringContainsString('php::Str &get_str(uint32_t index) noexcept {', $extension);
         $this->assertStringContainsString('return get_str(', $extension);
         $this->assertStringContainsString('php::Array php_exported_variadic_arg_0_default_value() {', $extension);

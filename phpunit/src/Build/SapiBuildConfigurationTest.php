@@ -1,24 +1,24 @@
 <?php
 
-namespace TypePhpTest\Build;
+namespace TypePhp\Tests\Build;
 
 use PHPUnit\Framework\TestCase;
 use TypePhp\Build\SapiBuildConfiguration;
 
 final class SapiBuildConfigurationTest extends TestCase
 {
-    public function testTargetsAcceptSingleBothAndLists(): void
+    public function testTargetsAcceptEmbedCliFpmAndLists(): void
     {
+        self::assertSame(['embed'], SapiBuildConfiguration::parseTargets('embed'));
         self::assertSame(['cli'], SapiBuildConfiguration::parseTargets('cli'));
-        self::assertSame(['cli', 'fpm'], SapiBuildConfiguration::parseTargets('both'));
         self::assertSame(['fpm', 'cli'], SapiBuildConfiguration::parseTargets(['fpm', 'cli', 'fpm']));
-        self::assertSame(['cli', 'fpm'], SapiBuildConfiguration::parseTargets('cli, fpm'));
+        self::assertSame(['embed', 'cli', 'fpm'], SapiBuildConfiguration::parseTargets('embed, cli, fpm'));
     }
 
     public function testInvalidTargetIsRejected(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('Expected cli, fpm, or both');
+        $this->expectExceptionMessage('Expected embed, cli, or fpm');
         SapiBuildConfiguration::parseTargets('apache');
     }
 }

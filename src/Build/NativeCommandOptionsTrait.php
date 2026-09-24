@@ -156,6 +156,19 @@ trait NativeCommandOptionsTrait
         $libraries = array_merge($libraries, $this->linkLibs);
 
         $ldflags = $this->ldflags;
+        $postLdflags = '';
+        if ($this->isPhpBuilderBuild()
+            && $this->hasSapi('embed')
+            && $this->sapiPhpBuildDirectory !== null
+        ) {
+            $makefile = $this->sapiPhpBuildDirectory . '/Makefile';
+            $contents = is_file($makefile) ? (string) file_get_contents($makefile) : '';
+            if (preg_match('/^EXTRA_LIBS[ \t]*=[ \t]*(.*)$/m', $contents, $match) === 1) {
+                // Static libphp references these system libraries, so they must
+                // appear after -lphp on linkers that resolve archives left-to-right.
+                $postLdflags = trim($match[1]);
+            }
+        }
         $targetPlatform = $this->targetPlatform;
         if ($this->fullStatic) {
             // The bundled libphp.a carries musl libc, so the link must use musl's
@@ -181,6 +194,7 @@ trait NativeCommandOptionsTrait
             'library_paths' => $libraryPaths,
             'libraries' => $libraries,
             'ldflags' => $ldflags,
+            'post_ldflags' => $postLdflags,
             'debug' => $this->debug,
             'no_console' => $this->noConsole,
             'build_mode' => $this->buildMode,

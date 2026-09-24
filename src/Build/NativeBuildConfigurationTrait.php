@@ -177,9 +177,9 @@ trait NativeBuildConfigurationTrait
             $includePaths = array_merge($includePaths, $phpSdkPaths);
         } else {
             // Linux/macOS
-            $phpPaths = $platform->buildPhpIncludePaths($this->getPhpDir(), $this->isSapiBuild());
+            $phpPaths = $platform->buildPhpIncludePaths($this->getPhpDir(), $this->isPhpBuilderBuild());
             $includePaths = array_merge($includePaths, $phpPaths);
-            if ($this->isSapiBuild() && $this->sapiPhpBuildDirectory !== null) {
+            if ($this->isPhpBuilderBuild() && $this->sapiPhpBuildDirectory !== null) {
                 $makefile = $this->sapiPhpBuildDirectory . '/Makefile';
                 $contents = is_file($makefile) ? (string) file_get_contents($makefile) : '';
                 if (preg_match('/^INCLUDES[ \t]*=[ \t]*(.*)$/m', $contents, $match) === 1) {
@@ -211,9 +211,11 @@ trait NativeBuildConfigurationTrait
         }
 
         $platform = $this->getPlatform();
-        $libraryPaths = [
-            $this->getPhpxDir() . '/lib',
-        ];
+        $libraryPaths = [];
+        if ($this->isPhpBuilderBuild() && $this->sapiPhpxArchive !== null) {
+            $libraryPaths[] = dirname($this->sapiPhpxArchive);
+        }
+        $libraryPaths[] = $this->getPhpxDir() . '/lib';
 
         // Add the platform-specific PHP library paths
         if ($platform instanceof Windows) {
@@ -334,6 +336,10 @@ trait NativeBuildConfigurationTrait
         }
 
         $platform = $this->getPlatform();
+
+        if ($this->isPhpBuilderBuild() && $this->sapiPhpxArchive !== null) {
+            return is_file($this->sapiPhpxArchive) ? $this->sapiPhpxArchive : null;
+        }
 
         if ($platform instanceof Windows) {
             $phpxLibPath = $this->getPhpxDir() . '\\lib\\phpx.lib';
