@@ -2,15 +2,20 @@
 
 namespace TypePhp\Installer;
 
+use TypePhp\Http\Downloader;
 use TypePhp\Platform\Linux;
 
 final class LibPhpInstaller
 {
     private const string RELEASE_API = 'https://www.php.net/releases/index.php?json=1&version=%s&max=100';
     private ?string $sourcePhpDir = null;
+    private readonly Downloader $downloader;
 
-    public function __construct(private readonly InteractiveConsole $console = new InteractiveConsole())
-    {
+    public function __construct(
+        private readonly InteractiveConsole $console = new InteractiveConsole(),
+        ?string $proxy = null,
+    ) {
+        $this->downloader = new Downloader($proxy);
     }
 
     public function ensure(string $currentPhpDir): ?string
@@ -119,7 +124,7 @@ final class LibPhpInstaller
 
     private function fetchReleaseList(string $branch): array
     {
-        $json = $this->downloadText(sprintf(self::RELEASE_API, rawurlencode($branch)));
+        $json = $this->downloader->downloadText(sprintf(self::RELEASE_API, rawurlencode($branch)));
         $data = json_decode($json, true, flags: JSON_THROW_ON_ERROR);
         if (!is_array($data)) {
             throw new \RuntimeException('Invalid release list returned by PHP.net');
@@ -173,7 +178,7 @@ final class LibPhpInstaller
 
         if (!is_file($archive) || hash_file('sha256', $archive) !== $release['sha256']) {
             $this->console->write('Downloading ' . $release['url']);
-            $this->downloadFile($release['url'], $archive);
+            $this->downloader->downloadFile($release['url'], $archive);
         }
         if (hash_file('sha256', $archive) !== $release['sha256']) {
             throw new \RuntimeException('PHP source archive SHA-256 verification failed');
@@ -320,33 +325,6 @@ final class LibPhpInstaller
             }
         }
         return null;
-    }
-
-    private function downloadText(string $url): string
-    {
-        $context = stream_context_create(['http' => ['timeout' => 30, 'user_agent' => 'TypePHP/tpc']]);
-        $data = @file_get_contents($url, false, $context);
-        if ($data === false) {
-            $curl = trim((string) shell_exec('command -v curl 2>/dev/null'));
-            if ($curl !== '') {
-                return $this->capture([$curl, '--fail', '--location', '--retry', '3', $url]);
-            }
-            throw new \RuntimeException("Unable to download {$url}; enable allow_url_fopen or install curl");
-        }
-        return $data;
-    }
-
-    private function downloadFile(string $url, string $target): void
-    {
-        $curl = trim((string) shell_exec('command -v curl 2>/dev/null'));
-        if ($curl !== '') {
-            $this->run([$curl, '--fail', '--location', '--retry', '3', '--output', $target, $url]);
-            return;
-        }
-        $data = $this->downloadText($url);
-        if (file_put_contents($target, $data) === false) {
-            throw new \RuntimeException("Unable to write {$target}");
-        }
     }
 
     private function run(array $command, ?string $cwd = null): void

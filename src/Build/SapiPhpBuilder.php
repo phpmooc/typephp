@@ -18,6 +18,7 @@ final class SapiPhpBuilder
     public function __construct(
         private readonly string $phpxSourceDirectory,
         callable $output,
+        private readonly ?string $proxy = null,
     ) {
         $this->output = \Closure::fromCallable($output);
     }
@@ -41,6 +42,7 @@ final class SapiPhpBuilder
         $source = (new OfficialPhpSource(
             OfficialPhpSource::defaultCacheDirectory(),
             $this->output,
+            $this->proxy,
         ))->prepare($phpVersion);
         $sourceVersion = OfficialPhpSource::version($source);
         $baseOptions = $this->sourceConfigureOptions($source);

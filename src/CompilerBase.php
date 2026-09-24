@@ -690,6 +690,7 @@ class CompilerBase implements PropertyAccessContext
     protected array $externalImportStubFiles = [];
     protected bool $enableProfiler = false;
     protected bool $noProgress = false;
+    protected ?string $downloadProxy = null;
     protected bool $forTest = false;
     protected Parser $parser;
     protected ?AstCache $astCache = null;

@@ -177,6 +177,11 @@ class Constants
             'description' => 'PHP language version to accept (8.4 or 8.5; default: 8.5)',
             'required' => false,
         ],
+        'proxy' => [
+            'longPrefix' => 'proxy',
+            'description' => 'Proxy URL used for file downloads (HTTP(S) or SOCKS)',
+            'required' => false,
+        ],
         'force' => [
             'prefix' => 'f',
             'longPrefix' => 'force',

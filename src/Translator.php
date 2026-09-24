@@ -362,6 +362,13 @@ class Translator extends Preprocessor
     {
         $path = null;
         for ($i = 1; $i < count($argv); $i++) {
+            if ($argv[$i] === '--proxy') {
+                ++$i;
+                continue;
+            }
+            if (str_starts_with($argv[$i], '--proxy=')) {
+                continue;
+            }
             if ($argv[$i] !== '' && $argv[$i][0] !== '-') {
                 $path = $argv[$i];
                 break;
@@ -443,6 +450,7 @@ class Translator extends Preprocessor
             ['--lto', 'Enable Link Time Optimization (-flto)'],
             ['--no-literal-strings', 'Disable literal string optimization'],
             ['--php-version <ver>', 'Accepted PHP language version (8.4-8.5, default: 8.5)'],
+            ['--proxy <url>', 'Proxy URL used for file downloads'],
             ['--no-progress', 'Print one compilation line per file instead of a progress bar'],
             ['--no-console', 'Hide the console window (Windows GUI applications only)'],
             ['--sanitize <type>', 'Enable a sanitizer such as address or undefined'],
@@ -472,6 +480,14 @@ class Translator extends Preprocessor
     protected function applyCommandLineArguments(): void
     {
         $this->applyPhpVersionCommandLineArgument();
+
+        if ($this->climate->arguments->defined('proxy')) {
+            $proxy = trim((string) $this->climate->arguments->get('proxy'));
+            if ($proxy === '') {
+                $this->error('Option --proxy requires a non-empty URL');
+            }
+            $this->downloadProxy = $proxy;
+        }
 
         // The Nano syntax policy is platform-independent. On non-Windows hosts
         // only the runtime source and link inputs change; argument parsing,

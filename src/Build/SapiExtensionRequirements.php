@@ -44,14 +44,14 @@ final class SapiExtensionRequirements
             }
         }
         $extensions = [];
-        foreach (array_keys($manifests) as $manifest) {
-            $decoded = json_decode((string) file_get_contents($manifest), true);
+        foreach (array_keys($manifests) as $manifestPath) {
+            $decoded = json_decode((string) file_get_contents($manifestPath), true);
             if (!is_array($decoded)) {
-                throw new \RuntimeException("Invalid Composer manifest: {$manifest}");
+                throw new \RuntimeException("Invalid Composer manifest: {$manifestPath}");
             }
             $require = $decoded['require'] ?? [];
             if (!is_array($require)) {
-                throw new \RuntimeException("Composer `require` must be an object: {$manifest}");
+                throw new \RuntimeException("Composer `require` must be an object: {$manifestPath}");
             }
             foreach (array_keys($require) as $package) {
                 if (is_string($package) && str_starts_with(strtolower($package), 'ext-')) {

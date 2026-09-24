@@ -583,7 +583,7 @@ trait SourcePipelineTrait
         $phpDir = $this->getPhpDir();
         if ($this->isBuildModeEmbed() && $platform instanceof Linux) {
             try {
-                $phpDir = (new LibPhpInstaller())->ensure($phpDir) ?? $phpDir;
+                $phpDir = (new LibPhpInstaller(proxy: $this->downloadProxy))->ensure($phpDir) ?? $phpDir;
             } catch (\Throwable $e) {
                 $this->error('Unable to install libphp.so: ' . $e->getMessage());
             }
@@ -665,6 +665,7 @@ trait SourcePipelineTrait
             $runtime = (new SapiPhpBuilder(
                 $this->getPhpxDir(),
                 fn (string $message) => $this->output($message, 'lightBlue'),
+                $this->downloadProxy,
             ))->prepare(
                 $this->phpVersion,
                 $this->sapiTargets,

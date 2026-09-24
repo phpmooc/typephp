@@ -2,17 +2,22 @@
 
 namespace TypePhp\Build;
 
+use TypePhp\Http\Downloader;
+
 final class OfficialPhpSource
 {
     private const string RELEASE_API = 'https://www.php.net/releases/index.php?json=1&version=%s&max=100';
     private readonly \Closure $output;
+    private readonly Downloader $downloader;
 
     /** @param callable(string):void $output */
     public function __construct(
         private readonly string $cacheDirectory,
         callable $output,
+        ?string $proxy = null,
     ) {
         $this->output = \Closure::fromCallable($output);
+        $this->downloader = new Downloader($proxy);
     }
 
     public static function defaultCacheDirectory(?string $home = null): string
@@ -82,7 +87,7 @@ final class OfficialPhpSource
         }
 
         $data = json_decode(
-            $this->downloadText(sprintf(self::RELEASE_API, rawurlencode($branch))),
+            $this->downloader->downloadText(sprintf(self::RELEASE_API, rawurlencode($branch))),
             true,
             flags: JSON_THROW_ON_ERROR,
         );
@@ -131,7 +136,7 @@ final class OfficialPhpSource
             ($this->output)('Downloading PHP ' . $release['version'] . ' source from php.net');
             $temporary = $archive . '.part-' . bin2hex(random_bytes(6));
             try {
-                $this->downloadFile($release['url'], $temporary);
+                $this->downloader->downloadFile($release['url'], $temporary);
                 if (hash_file('sha256', $temporary) !== $release['sha256']) {
                     throw new \RuntimeException('PHP source archive SHA-256 verification failed');
                 }
@@ -176,33 +181,6 @@ final class OfficialPhpSource
         return $match[1];
     }
 
-    private function downloadText(string $url): string
-    {
-        $context = stream_context_create(['http' => ['timeout' => 30, 'user_agent' => 'TypePHP/tpc']]);
-        $contents = @file_get_contents($url, false, $context);
-        if (is_string($contents)) {
-            return $contents;
-        }
-        $curl = trim((string) shell_exec('command -v curl 2>/dev/null'));
-        if ($curl === '') {
-            throw new \RuntimeException("Unable to download {$url}; enable allow_url_fopen or install curl");
-        }
-        return $this->capture([$curl, '--fail', '--location', '--retry', '3', $url]);
-    }
-
-    private function downloadFile(string $url, string $target): void
-    {
-        $curl = trim((string) shell_exec('command -v curl 2>/dev/null'));
-        if ($curl !== '') {
-            $this->run([$curl, '--fail', '--location', '--retry', '3', '--output', $target, $url]);
-            return;
-        }
-        $contents = $this->downloadText($url);
-        if (file_put_contents($target, $contents) === false) {
-            throw new \RuntimeException("Unable to write {$target}");
-        }
-    }
-
     /** @param list<string> $command */
     private function run(array $command): void
     {
@@ -210,23 +188,6 @@ final class OfficialPhpSource
         if (!is_resource($process) || proc_close($process) !== 0) {
             throw new \RuntimeException('Command failed: ' . implode(' ', $command));
         }
-    }
-
-    /** @param list<string> $command */
-    private function capture(array $command): string
-    {
-        $process = proc_open($command, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
-        if (!is_resource($process)) {
-            throw new \RuntimeException('Unable to run command: ' . implode(' ', $command));
-        }
-        $stdout = stream_get_contents($pipes[1]);
-        $stderr = stream_get_contents($pipes[2]);
-        fclose($pipes[1]);
-        fclose($pipes[2]);
-        if (proc_close($process) !== 0) {
-            throw new \RuntimeException(trim($stderr));
-        }
-        return $stdout;
     }
 
     private function mkdir(string $directory): void
