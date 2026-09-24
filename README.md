@@ -755,7 +755,8 @@ Key options:
 | `-o`, `--output <file>` | Output file name |
 | `-m`, `--mode <bin\|lib\|ext>` | Build mode (default `bin`) |
 | `--sapi <embed\|cli\|fpm>` | Binary SAPI target (default `embed`; comma-separated lists accepted) |
-| `--php-builder <config>` | Build a private PHP runtime from php-src |
+| `--entry <file>` | PHP entry file executed when the CLI SAPI starts |
+| `--php-builder[=<config>]` | Build a private PHP runtime from php-src; omitted config defaults to `{}` |
 | `-r`, `--run` | Run after a successful build |
 | `-j`, `--job <num>` | Parallel compile jobs (default `4`) |
 | `-f`, `--force` | Rebuild reusable PHPX objects instead of using the cache |

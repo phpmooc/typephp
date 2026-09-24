@@ -68,7 +68,8 @@ bin/tpc.php app.php --dry --build-dir /tmp/typephp-build
 | `-o`, `--output <file>` | Output file name. |
 | `-m`, `--mode <bin|lib|ext>` | Build mode, default `bin`. |
 | `--sapi <embed|cli|fpm>` | SAPI used by a `bin` target; accepts a comma-separated list. Default: `embed`. |
-| `--php-builder <config>` | Build PHP from php-src, for example `--php-builder='extensions: [swoole, mongodb]; zts: on'`. |
+| `--entry <file>` | PHP entry file executed by the CLI SAPI; the CLI value overrides YAML `entry`. |
+| `--php-builder[=<config>]` | Build PHP from php-src; omitted config defaults to `{}`, for example `--php-builder='extensions: [swoole, mongodb]; zts: on'`. |
 | `-r`, `--run` | Run after a successful build. |
 | `-j`, `--job <num>` | Number of parallel compilation jobs, default `4`. |
 | `-f`, `--force` | Ignore the phpx misc object cache and force recompilation. |

@@ -38,6 +38,14 @@ final class PhpBuilderConfigurationTest extends TestCase
         self::assertSame(['curl', 'mbstring'], $configuration->extensions);
     }
 
+    public function testEmptyCommandLineConfigurationUsesMappingDefaults(): void
+    {
+        $configuration = PhpBuilderConfiguration::fromCommandLine('');
+
+        self::assertFalse($configuration->zts);
+        self::assertSame([], $configuration->extensions);
+    }
+
     public function testRejectsLegacyListOfMappingsYamlShape(): void
     {
         $this->expectException(\InvalidArgumentException::class);

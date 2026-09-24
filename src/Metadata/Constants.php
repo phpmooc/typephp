@@ -200,10 +200,16 @@ class Constants
             'longPrefix' => 'php-builder',
             'description' => 'Build PHP from source, e.g. "extensions: [curl]; zts: on"',
             'required' => false,
+            'defaultValue' => '{}',
         ],
         'sapi' => [
             'longPrefix' => 'sapi',
             'description' => 'PHP SAPI target: embed, cli, fpm, or a comma-separated list',
+            'required' => false,
+        ],
+        'entry' => [
+            'longPrefix' => 'entry',
+            'description' => 'PHP entry file executed by the CLI SAPI',
             'required' => false,
         ],
         'run' => [

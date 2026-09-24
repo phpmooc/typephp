@@ -479,6 +479,9 @@ trait SourcePipelineTrait
         // only after a YAML project has loaded all included configuration.
         $this->applyCommandLineArguments();
         $this->validateLoadedProjectConfiguration();
+        if ($this->sapiEntryFile !== null) {
+            $files = array_values(array_diff($files, [$this->sapiEntryFile]));
+        }
         $files = $this->excludeGeneratedLibraryStub($files);
         return $this->filterIgnoredFiles($files);
     }
@@ -704,10 +707,61 @@ trait SourcePipelineTrait
             return;
         }
         try {
+            $phpBuildProgress = null;
+            $lastLineProgress = -1;
+            $lastLineProgressLabel = '';
             $runtime = (new SapiPhpBuilder(
                 $this->getPhpxDir(),
                 fn (string $message) => $this->output($message, 'lightBlue'),
                 $this->downloadProxy,
+                function (
+                    int $completed,
+                    int $total,
+                    string $detail,
+                    bool $finished,
+                ) use (&$phpBuildProgress, &$lastLineProgress, &$lastLineProgressLabel): void {
+                    if ($total === 0) {
+                        return;
+                    }
+                    $isStage = preg_match(
+                        '/^(?:Building|Finishing|Linking|Generating|Installing|PHP runtime)/',
+                        $detail,
+                    ) === 1;
+                    $label = $isStage ? $detail : 'Building PHP';
+                    if ($this->noProgress) {
+                        if ($completed !== $lastLineProgress || $label !== $lastLineProgressLabel || $finished) {
+                            $percent = min(100, (int) floor($completed / $total * 100));
+                            $suffix = $detail === '' || $isStage
+                                ? ''
+                                : ' ' . $detail;
+                            $this->output("[{$completed}/{$total}] {$percent}% {$label}{$suffix}", 'white');
+                            $lastLineProgress = $completed;
+                            $lastLineProgressLabel = $label;
+                        }
+                        return;
+                    }
+                    if ($phpBuildProgress === null) {
+                        $phpBuildProgress = new Progressbar();
+                        $phpBuildProgress->width(30)
+                            ->barStyle([AnsiTerminal::FG_GREEN])
+                            ->percentageStyle([AnsiTerminal::TEXT_BOLD])
+                            ->labelStyle([AnsiTerminal::FG_CYAN])
+                        ;
+                    }
+                    // A dynamic "(31s)" suffix shifts the bar on every digit
+                    // boundary, and shorter stage names leave bytes from the
+                    // previous frame behind. Keep the TTY layout fixed; the
+                    // elapsed heartbeat remains visible with --no-progress.
+                    $ttyLabel = preg_replace('/ \(\d+s\)$/', '', $label) ?? $label;
+                    $phpBuildProgress->renderInPlace($completed, $total, str_pad($ttyLabel, 26));
+                    if ($finished) {
+                        echo PHP_EOL;
+                        $phpBuildProgress = null;
+                        $lastLineProgress = -1;
+                        $lastLineProgressLabel = '';
+                    }
+                },
+                CompilerToolchain::fromBackend($this->getCompilerBackend()),
             ))->prepare(
                 $this->phpVersion,
                 $this->sapiTargets,

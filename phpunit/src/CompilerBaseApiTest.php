@@ -1013,6 +1013,35 @@ YAML);
         $this->invokeMethod('validateLoadedProjectConfiguration');
     }
 
+    public function testCommandLineEntryConfiguresPhpBuilderCliSapi(): void
+    {
+        global $argv;
+        $source = $this->testDir . '/foo.php';
+        $entry = $this->testDir . '/index.php';
+        file_put_contents($source, "<?php\nfunction compiled_helper(): void {}\n");
+        file_put_contents($entry, "<?php\ncompiled_helper();\n");
+        $argv = [
+            'compiler.php',
+            $source,
+            '--sapi=cli',
+            '--php-builder',
+            '--entry=' . $entry,
+        ];
+
+        $compiler = CompilerTest::create($this->testDir);
+        $files = $compiler->getFiles($source);
+        $reflection = new \ReflectionClass($compiler);
+        $entryProperty = $reflection->getProperty('sapiEntryFile');
+        $embeddedFilesProperty = (new \ReflectionClass(\TypePhp\Translator::class))
+            ->getProperty('embeddedFiles');
+
+        $this->assertSame([$source], $files);
+        $this->assertSame(['cli'], $compiler->getSapiTargets());
+        $this->assertTrue($compiler->isPhpBuilderBuild());
+        $this->assertSame($entry, $entryProperty->getValue($compiler));
+        $this->assertContains($entry, $embeddedFilesProperty->getValue($compiler));
+    }
+
     public function testPhpBuilderCliRequiresEntry(): void
     {
         $projectFile = $this->createProjectFile(<<<'YAML'
@@ -1163,6 +1192,22 @@ YAML, 'myproject.yml', 'cli-output');
         $applyMethod->invoke($compiler);
         $this->assertSame('cli', $outputProp->getValue($compiler));
         $this->assertSame('out_file', $targetProp->getValue($compiler));
+    }
+
+    public function testBarePhpBuilderOptionKeepsFollowingSourcePositional(): void
+    {
+        global $argv;
+        $source = $this->testDir . '/hello.php';
+        file_put_contents($source, "<?php\nfunction main(): void {}\n");
+        $argv = ['compiler.php', '--php-builder', $source];
+
+        $compiler = CompilerTest::create($this->testDir);
+        $method = (new \ReflectionClass($compiler))->getMethod('applyCommandLineArguments');
+        $method->setAccessible(true);
+        $method->invoke($compiler);
+
+        $this->assertSame(['compiler.php', '--php-builder={}', $source], $argv);
+        $this->assertTrue($compiler->isPhpBuilderBuild());
     }
 
     public function testApplyCommandLineArgumentsDoesNotClearYamlRepeatableOptionsWhenCliAbsent(): void

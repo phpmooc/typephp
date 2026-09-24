@@ -688,7 +688,8 @@ bin/tpc.php --wasm=browser app.php
 | `-o`, `--output <file>` | 输出文件名 |
 | `-m`, `--mode <bin\|lib\|ext>` | 构建模式（默认 `bin`） |
 | `--sapi <embed\|cli\|fpm>` | 二进制使用的 SAPI（默认 `embed`，支持逗号分隔多个值） |
-| `--php-builder <配置>` | 从 php-src 构建私有 PHP 运行时 |
+| `--entry <file>` | CLI SAPI 启动时执行的 PHP 入口文件 |
+| `--php-builder[=<配置>]` | 从 php-src 构建私有 PHP 运行时；省略配置时默认为 `{}` |
 | `-r`, `--run` | 构建成功后运行 |
 | `-j`, `--job <num>` | 并行编译任务数（默认 `4`） |
 | `-f`, `--force` | 不使用缓存，重新编译可复用 PHPX 对象 |

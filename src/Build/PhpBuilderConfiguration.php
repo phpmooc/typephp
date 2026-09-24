@@ -33,7 +33,7 @@ final readonly class PhpBuilderConfiguration
     {
         $value = trim($value);
         if ($value === '') {
-            throw new \InvalidArgumentException('Option --php-builder requires a non-empty configuration');
+            return self::fromYaml([]);
         }
 
         try {

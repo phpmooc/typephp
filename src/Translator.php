@@ -363,11 +363,12 @@ class Translator extends Preprocessor
     {
         $path = null;
         for ($i = 1; $i < count($argv); $i++) {
-            if ($argv[$i] === '--proxy') {
+            if ($argv[$i] === '--proxy' || $argv[$i] === '--entry') {
                 ++$i;
                 continue;
             }
-            if (str_starts_with($argv[$i], '--proxy=')) {
+            if (str_starts_with($argv[$i], '--proxy=')
+                || str_starts_with($argv[$i], '--entry=')) {
                 continue;
             }
             if ($argv[$i] !== '' && $argv[$i][0] !== '-') {
@@ -439,7 +440,8 @@ class Translator extends Preprocessor
             ['-f, --force', 'Clear incremental caches and force a full rebuild'],
             ['-m, --mode <mode>', 'Build mode: bin, lib, or ext (default: bin)'],
             ['--sapi <target>', 'PHP SAPI target: embed (default), CLI, and/or FPM'],
-            ['--php-builder <config>', 'Build a private PHP runtime from source'],
+            ['--entry <file>', 'PHP entry file executed by the CLI SAPI'],
+            ['--php-builder[=<config>]', 'Build a private PHP runtime from source (default: {})'],
             ['-r, --run', 'Run the compiled binary after a successful build'],
             ['-j, --job <num>', 'Number of parallel compilation jobs (default: 4)'],
             ['--cxx-std <ver>', 'C++ standard version (default: c++17)'],
@@ -513,6 +515,12 @@ class Translator extends Preprocessor
         }
         if ($this->climate->arguments->defined('sapi')) {
             $this->configureSapiTargets((string) $this->climate->arguments->get('sapi'));
+        }
+        if ($this->climate->arguments->defined('entry')) {
+            $this->configureSapiEntry(
+                (string) $this->climate->arguments->get('entry'),
+                getcwd() ?: $this->rootPath,
+            );
         }
         if ($this->climate->arguments->defined('php-builder')) {
             try {
@@ -1020,7 +1028,12 @@ class Translator extends Preprocessor
 
         for ($i = 1; $i < count($argv); $i++) {
             $arg = $argv[$i];
-            if (preg_match('/^-([a-zA-Z])(.+)$/', $arg, $matches)) {
+            if ($arg === '--php-builder') {
+                // The configuration is optional, but CLImate otherwise treats
+                // the following positional source as this option's value.
+                // Explicit configurations use --php-builder="...".
+                $processed[] = '--php-builder={}';
+            } elseif (preg_match('/^-([a-zA-Z])(.+)$/', $arg, $matches)) {
                 $option = $matches[1];
                 $value = $matches[2];
                 $processed[] = "-{$option}";
@@ -2917,7 +2930,7 @@ CODE;
                     $objectFiles,
                     [$sapiObject, $internalFunctionsObject],
                 ));
-                $this->linkNativeTarget($embedObjects, $outputs['embed']);
+                $this->linkNativeTarget($embedObjects, $outputs['embed'], false);
             }
 
             $runnableTargets = array_values(array_intersect($this->sapiTargets, ['embed', 'cli']));
@@ -2930,7 +2943,11 @@ CODE;
     }
 
     /** @param list<string> $objectFiles */
-    private function linkNativeTarget(array $objectFiles, string $targetFile): string
+    private function linkNativeTarget(
+        array $objectFiles,
+        string $targetFile,
+        bool $announceSuccess = true,
+    ): string
     {
 
         // Windows: add the .res resource file to the link
@@ -2943,7 +2960,9 @@ CODE;
 
         if ($this->hasLinkCache($objectFiles, $targetFile)) {
             $this->climate->darkGray('[incremental] link cache: ' . $targetFile);
-            $this->climate->green('Build successful: ' . $targetFile);
+            if ($announceSuccess) {
+                $this->climate->green('Build successful: ' . $targetFile);
+            }
             return $targetFile;
         }
 
@@ -2968,7 +2987,9 @@ CODE;
         }
         $this->writeLinkCache($objectFiles, $targetFile);
 
-        $this->climate->green('Build successful: ' . $targetFile);
+        if ($announceSuccess) {
+            $this->climate->green('Build successful: ' . $targetFile);
+        }
 
         return $targetFile;
     }
@@ -4291,18 +4312,7 @@ CODE;
             }
         }
         if (array_key_exists('entry', $cfg)) {
-            if (!is_string($cfg['entry']) || trim($cfg['entry']) === '') {
-                $this->error('`entry` must be a non-empty PHP file path');
-            }
-            $entryPath = $this->resolvePath($cfg['entry'], $projectDir, 'Entry path');
-            $entry = realpath($entryPath);
-            if ($entry === false || !is_file($entry)) {
-                $this->error('Entry file does not exist: `' . $cfg['entry'] . '`');
-            }
-            if (!FileScanner::isPhpFile($entry) || str_ends_with($entry, '.stub.php')) {
-                $this->error('`entry` must select an executable PHP file');
-            }
-            $this->sapiEntryFile = $entry;
+            $this->configureSapiEntry($cfg['entry'], $projectDir);
         }
 
         if (!empty($cfg['sources'])) {
@@ -4675,6 +4685,29 @@ CODE;
         $this->phpBuilderExtensions = $configuration->extensions;
         // The SAPI executable owns main(). Generated TypePHP code is linked as
         // an internal Zend module and therefore has no dynamic get_module().
+    }
+
+    private function configureSapiEntry(mixed $value, string $baseDirectory): void
+    {
+        if (!is_string($value) || trim($value) === '') {
+            $this->error('`entry` must be a non-empty PHP file path');
+        }
+        $value = trim($value);
+        $entryPath = $this->resolvePath($value, $baseDirectory, 'Entry path');
+        $entry = realpath($entryPath);
+        if ($entry === false || !is_file($entry)) {
+            $this->error('Entry file does not exist: `' . $value . '`');
+        }
+        if (!FileScanner::isPhpFile($entry) || str_ends_with($entry, '.stub.php')) {
+            $this->error('`entry` must select an executable PHP file');
+        }
+        $this->sapiEntryFile = $entry;
+        if (!in_array($entry, $this->embeddedFiles, true)) {
+            $this->embeddedFiles[] = $entry;
+        }
+        if (!in_array($entry, $this->embeddedPhpFiles, true)) {
+            $this->embeddedPhpFiles[] = $entry;
+        }
     }
 
     private function configureSapiTargets(string|array $value): void

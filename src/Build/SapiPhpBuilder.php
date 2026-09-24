@@ -13,14 +13,22 @@ use TypePhp\Installer\PhpBuildConfiguration;
 final class SapiPhpBuilder
 {
     private readonly \Closure $output;
+    private readonly ?\Closure $progress;
+    private ?CompilerToolchain $activeToolchain = null;
 
-    /** @param callable(string):void $output */
+    /**
+     * @param callable(string):void $output
+     * @param null|callable(int, int, string, bool):void $progress
+     */
     public function __construct(
         private readonly string $phpxSourceDirectory,
         callable $output,
         private readonly ?string $proxy = null,
+        ?callable $progress = null,
+        private readonly ?CompilerToolchain $toolchain = null,
     ) {
         $this->output = \Closure::fromCallable($output);
+        $this->progress = $progress === null ? null : \Closure::fromCallable($progress);
     }
 
     /**
@@ -40,6 +48,12 @@ final class SapiPhpBuilder
         if ($targets === [] || array_diff($targets, ['embed', 'cli', 'fpm']) !== []) {
             throw new \InvalidArgumentException('PHP builder SAPI targets must contain embed, cli, or fpm');
         }
+        $this->activeToolchain = $this->toolchain ?? new CompilerToolchain(
+            getenv('CC') ?: 'cc',
+            getenv('CXX') ?: 'c++',
+            getenv('AR') ?: 'ar',
+            CompilerToolchain::ARCHIVER_UNIX,
+        );
         $officialSource = (new OfficialPhpSource(
             OfficialPhpSource::defaultCacheDirectory(),
             $this->output,
@@ -66,8 +80,9 @@ final class SapiPhpBuilder
             $externalExtensions,
             PHP_OS_FAMILY,
             php_uname('m'),
-            getenv('CC') ?: '',
-            getenv('CXX') ?: '',
+            $this->activeToolchain->cCompiler,
+            $this->activeToolchain->cxxCompiler,
+            $this->activeToolchain->archiver,
             filemtime($source . '/configure'),
         ];
         $compatibility = hash('sha256', json_encode($identity, JSON_THROW_ON_ERROR));
@@ -124,6 +139,7 @@ final class SapiPhpBuilder
             if ($needsInstall) {
                 ($this->output)('Building private PHP runtime (cached across application builds)');
                 $this->run(['make', '-j' . max(1, $jobs)], $build);
+                ($this->output)('Installing private PHP runtime');
                 $this->run(['make', 'install'], $build);
             }
 
@@ -325,7 +341,22 @@ final class SapiPhpBuilder
             );
             ($this->output)('Caching PHP ' . strtoupper($target) . ' runtime: ' . $archives[$target]);
             $temporary = $archives[$target] . '.part-' . bin2hex(random_bytes(6));
-            $this->run(['ar', 'rcs', $temporary, ...$objects], $build);
+            $responseFile = $archives[$target] . '.objects.rsp';
+            AtomicFile::write(
+                $responseFile,
+                implode(PHP_EOL, array_map($this->quoteResponseFileArgument(...), $objects)) . PHP_EOL,
+            );
+            try {
+                $this->run($this->archiveCommand($temporary, '@' . $responseFile), $build);
+            } catch (\RuntimeException) {
+                // GNU ar and llvm-ar accept @response files. Keep a fallback
+                // for older platform archivers while still abbreviating the
+                // displayed command so hundreds of object paths are not
+                // written to the user's terminal.
+                @unlink($temporary);
+                ($this->output)('Archiver response files are unavailable; retrying with direct arguments');
+                $this->run($this->archiveCommand($temporary, ...$objects), $build);
+            }
             if (!rename($temporary, $archives[$target])) {
                 @unlink($temporary);
                 throw new \RuntimeException('Unable to store PHP SAPI archive: ' . $archives[$target]);
@@ -388,22 +419,336 @@ final class SapiPhpBuilder
     /** @param list<string> $command */
     private function run(array $command, string $directory): void
     {
-        ($this->output)('$ ' . implode(' ', array_map('escapeshellarg', $command)));
+        ($this->output)('$ ' . $this->displayCommand($command));
         $logPath = rtrim($directory, '/\\') . '/.typephp-build.log';
         $log = fopen($logPath, 'ab');
         if ($log === false) {
             throw new \RuntimeException("Unable to open SAPI build log: {$logPath}");
         }
         fwrite($log, PHP_EOL . '$ ' . implode(' ', array_map('escapeshellarg', $command)) . PHP_EOL);
-        $process = proc_open($command, [STDIN, $log, $log], $pipes, $directory);
-        $status = is_resource($process) ? proc_close($process) : -1;
+
+        $pendingObjects = $this->pendingMakeObjects($command, $directory);
+        $pendingObjectSet = array_fill_keys($pendingObjects, true);
+        $isCmakeBuild = basename($command[0]) === 'cmake' && in_array('--build', $command, true);
+        $progressTotal = $pendingObjects !== [] ? count($pendingObjects) : ($isCmakeBuild ? 100 : 0);
+        $progressLabel = $pendingObjects !== [] ? 'Building PHP' : 'Building PHPX';
+        $progressStage = $progressLabel;
+        $completed = 0;
+        $completedObjects = [];
+        if ($progressTotal !== 0 && $this->progress !== null) {
+            ($this->progress)(0, $progressTotal, $progressLabel, false);
+        }
+
+        $process = proc_open($command, [
+            STDIN,
+            ['pipe', 'w'],
+            ['pipe', 'w'],
+        ], $pipes, $directory, $this->processEnvironment());
+        if (!is_resource($process)) {
+            fclose($log);
+            throw new \RuntimeException('Unable to start command: ' . implode(' ', $command));
+        }
+        stream_set_blocking($pipes[1], false);
+        stream_set_blocking($pipes[2], false);
+        $lineBuffers = [1 => '', 2 => ''];
+        $startedAt = microtime(true);
+        $lastHeartbeatAt = $startedAt;
+        $exitStatus = -1;
+        while (true) {
+            $read = [];
+            foreach ([1, 2] as $index) {
+                if (!feof($pipes[$index])) {
+                    $read[] = $pipes[$index];
+                }
+            }
+            if ($read !== []) {
+                $write = null;
+                $except = null;
+                @stream_select($read, $write, $except, 1, 0);
+                foreach ($read as $stream) {
+                    $index = $stream === $pipes[1] ? 1 : 2;
+                    while (($chunk = fread($stream, 8192)) !== false && $chunk !== '') {
+                        fwrite($log, $chunk);
+                        $lineBuffers[$index] .= $chunk;
+                        $this->consumeProgressLines(
+                            $lineBuffers[$index],
+                            $pendingObjectSet,
+                            $completedObjects,
+                            $completed,
+                            $progressTotal,
+                            $progressLabel,
+                            $progressStage,
+                            $isCmakeBuild,
+                        );
+                    }
+                }
+            } else {
+                usleep(100_000);
+            }
+
+            $processStatus = proc_get_status($process);
+            $now = microtime(true);
+            if ($processStatus['running'] && $now - $lastHeartbeatAt >= 5.0) {
+                if ($progressTotal !== 0 && $this->progress !== null) {
+                    ($this->progress)(
+                        $this->liveProgressValue($completed, $progressTotal),
+                        $progressTotal,
+                        sprintf('%s (%ds)', $progressStage, (int) ($now - $startedAt)),
+                        false,
+                    );
+                } else {
+                    ($this->output)(sprintf(
+                        'Build command still running (%ds); output: %s',
+                        (int) ($now - $startedAt),
+                        $logPath,
+                    ));
+                }
+                $lastHeartbeatAt = $now;
+            }
+            if (!$processStatus['running']) {
+                $exitStatus = $processStatus['exitcode'];
+                break;
+            }
+        }
+        foreach ([1, 2] as $index) {
+            $chunk = stream_get_contents($pipes[$index]);
+            if (is_string($chunk) && $chunk !== '') {
+                fwrite($log, $chunk);
+                $lineBuffers[$index] .= $chunk;
+            }
+            $this->consumeProgressLines(
+                $lineBuffers[$index],
+                $pendingObjectSet,
+                $completedObjects,
+                $completed,
+                $progressTotal,
+                $progressLabel,
+                $progressStage,
+                $isCmakeBuild,
+                true,
+            );
+            fclose($pipes[$index]);
+        }
+        $closeStatus = proc_close($process);
+        if ($exitStatus < 0) {
+            $exitStatus = $closeStatus;
+        }
+        if ($progressTotal !== 0 && $this->progress !== null) {
+            if ($exitStatus === 0) {
+                $completed = $progressTotal;
+            }
+            ($this->progress)(
+                $completed,
+                $progressTotal,
+                $exitStatus === 0 ? $progressLabel . ' complete' : $progressLabel . ' failed',
+                true,
+            );
+        }
         fclose($log);
-        if ($status !== 0) {
+        if ($exitStatus !== 0) {
             $contents = (string) @file_get_contents($logPath);
             $lines = preg_split('/\R/', trim($contents)) ?: [];
             $tail = implode(PHP_EOL, array_slice($lines, -40));
             throw new \RuntimeException('Command failed: ' . implode(' ', $command) . PHP_EOL . 'Build log: ' . $logPath . ($tail === '' ? '' : PHP_EOL . $tail));
         }
+    }
+
+    private function quoteResponseFileArgument(string $argument): string
+    {
+        return '"' . str_replace(['\\', '"'], ['\\\\', '\\"'], $argument) . '"';
+    }
+
+    /** @return list<string> */
+    private function archiveCommand(string $archive, string ...$objects): array
+    {
+        $toolchain = $this->activeToolchain ?? $this->toolchain;
+        if ($toolchain === null) {
+            throw new \LogicException('PHP builder toolchain was not initialized');
+        }
+        if ($toolchain->archiverStyle === CompilerToolchain::ARCHIVER_MSVC) {
+            return [$toolchain->archiver, '/NOLOGO', '/OUT:' . $archive, ...$objects];
+        }
+        return [$toolchain->archiver, 'rcs', $archive, ...$objects];
+    }
+
+    /** @param list<string> $command */
+    private function displayCommand(array $command): string
+    {
+        $program = strtolower(preg_replace('/\.exe$/i', '', basename(str_replace('\\', '/', $command[0]))) ?? '');
+        if ((str_ends_with($program, 'ar') || $program === 'lib') && count($command) > 8) {
+            $objectCount = count($command) - 3;
+            return implode(' ', array_map('escapeshellarg', array_slice($command, 0, 3)))
+                . ' ' . escapeshellarg("@<{$objectCount} object files>");
+        }
+        return implode(' ', array_map('escapeshellarg', $command));
+    }
+
+    /** @param list<string> $command @return list<string> */
+    private function pendingMakeObjects(array $command, string $directory): array
+    {
+        if (basename($command[0]) !== 'make'
+            || array_filter(array_slice($command, 1), static fn (string $arg): bool => !str_starts_with($arg, '-')) !== []
+        ) {
+            return [];
+        }
+        $process = proc_open(
+            [$command[0], '-n', '-j1'],
+            [1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
+            $pipes,
+            $directory,
+            $this->processEnvironment(),
+        );
+        if (!is_resource($process)) {
+            return [];
+        }
+        $output = stream_get_contents($pipes[1]);
+        $error = stream_get_contents($pipes[2]);
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+        if (proc_close($process) !== 0) {
+            return [];
+        }
+        return $this->extractObjectTargets((string) $output . PHP_EOL . (string) $error);
+    }
+
+    /** @return list<string> */
+    private function extractObjectTargets(string $output): array
+    {
+        preg_match_all(
+            '/(?:^|\s)-o\s+(?:\'([^\']+\.lo)\'|"([^"]+\.lo)"|([^\s\'";]+\.lo))(?=\s|$)/m',
+            $output,
+            $matches,
+            PREG_SET_ORDER,
+        );
+        $targets = [];
+        foreach ($matches as $match) {
+            $target = $match[1] !== '' ? $match[1] : ($match[2] !== '' ? $match[2] : $match[3]);
+            $targets[$target] = true;
+        }
+        return array_keys($targets);
+    }
+
+    /**
+     * @param array<string, true> $pendingObjects
+     * @param array<string, true> $completedObjects
+     */
+    private function consumeProgressLines(
+        string &$buffer,
+        array $pendingObjects,
+        array &$completedObjects,
+        int &$completed,
+        int $total,
+        string $label,
+        string &$stage,
+        bool $isCmakeBuild,
+        bool $flush = false,
+    ): void {
+        $lines = preg_split('/\R/', $buffer);
+        if ($lines === false) {
+            return;
+        }
+        $buffer = $flush ? '' : (array_pop($lines) ?? '');
+        foreach ($lines as $line) {
+            $nextStage = $this->detectBuildStage($line);
+            if ($nextStage !== null && $nextStage !== $stage) {
+                $stage = $nextStage;
+                if ($this->progress !== null && $total !== 0) {
+                    ($this->progress)(
+                        $this->liveProgressValue($completed, $total),
+                        $total,
+                        $stage,
+                        false,
+                    );
+                }
+            }
+            if ($pendingObjects !== []) {
+                foreach ($this->extractObjectTargets($line) as $target) {
+                    if (!isset($pendingObjects[$target]) || isset($completedObjects[$target])) {
+                        continue;
+                    }
+                    $completedObjects[$target] = true;
+                    ++$completed;
+                    if ($this->progress !== null) {
+                        if ($completed >= $total) {
+                            $stage = 'Finishing PHP compilation';
+                            ($this->progress)(
+                                $this->liveProgressValue($completed, $total),
+                                $total,
+                                $stage,
+                                false,
+                            );
+                        } else {
+                            ($this->progress)(
+                                $this->liveProgressValue($completed, $total),
+                                $total,
+                                $target,
+                                false,
+                            );
+                        }
+                    }
+                }
+            } elseif ($isCmakeBuild && preg_match('/\[\s*(\d{1,3})%\]/', $line, $match) === 1) {
+                $next = min($total, (int) $match[1]);
+                if ($next > $completed) {
+                    $completed = $next;
+                    if ($this->progress !== null) {
+                        ($this->progress)($this->liveProgressValue($completed, $total), $total, $label, false);
+                    }
+                }
+            }
+        }
+    }
+
+    private function liveProgressValue(int $completed, int $total): int
+    {
+        // Progressbar rounds to the nearest integer percentage, so total - 1
+        // can still render as 100% for a large PHP build (633/634 = 99.84%).
+        // Reserve enough of the tail to keep every live update below 99.5%;
+        // the successful process exit is the only event allowed to show 100%.
+        $maximumLive = max(0, (int) ceil($total * 0.995) - 1);
+        return min($completed, $maximumLive);
+    }
+
+    private function detectBuildStage(string $line): ?string
+    {
+        if (str_contains($line, '--mode=link')) {
+            if (preg_match('/(?:^|\s)-o\s+[^\s]*opcache(?:\.la|\.so)(?:\s|$)/', $line) === 1) {
+                return 'Linking OPcache';
+            }
+            if (preg_match('#(?:^|\s)-o\s+(?:\'|")?sapi/cli/php(?:\'|"|\s|$)#', $line) === 1) {
+                return 'Linking PHP CLI';
+            }
+            if (preg_match('#(?:^|\s)-o\s+(?:\'|")?sapi/fpm/php-fpm(?:\'|"|\s|$)#', $line) === 1) {
+                return 'Linking PHP FPM';
+            }
+            if (preg_match('#(?:^|\s)-o\s+(?:\'|")?(?:libs/)?libphp(?:\.la|\.a)(?:\'|"|\s|$)#', $line) === 1) {
+                return 'Linking PHP Embed';
+            }
+        }
+        if (str_starts_with($line, 'Generating phar.php')) {
+            return 'Generating phar.php';
+        }
+        if (str_starts_with($line, 'Generating phar.phar')) {
+            return 'Generating phar.phar';
+        }
+        return null;
+    }
+
+    /** @return array<string, string>|null */
+    private function processEnvironment(): ?array
+    {
+        $toolchain = $this->activeToolchain ?? $this->toolchain;
+        if ($toolchain === null) {
+            return null;
+        }
+        $environment = getenv();
+        if (!is_array($environment)) {
+            $environment = [];
+        }
+        $environment['CC'] = $toolchain->cCompiler;
+        $environment['CXX'] = $toolchain->cxxCompiler;
+        $environment['AR'] = $toolchain->archiver;
+        return $environment;
     }
 
     private function mkdir(string $directory): void

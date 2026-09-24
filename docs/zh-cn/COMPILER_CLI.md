@@ -68,7 +68,8 @@ bin/tpc.php app.php --dry --build-dir /tmp/typephp-build
 | `-o`, `--output <file>` | 输出文件名。 |
 | `-m`, `--mode <bin|lib|ext>` | 构建模式，默认 `bin`。 |
 | `--sapi <embed|cli|fpm>` | `bin` 目标使用的 SAPI，支持逗号分隔的多个值；默认 `embed`。 |
-| `--php-builder <配置>` | 从 php-src 构建 PHP，例如 `--php-builder='extensions: [swoole, mongodb]; zts: on'`。 |
+| `--entry <file>` | CLI SAPI 启动时执行的 PHP 入口文件；命令行配置覆盖 YAML 的 `entry`。 |
+| `--php-builder[=<配置>]` | 从 php-src 构建 PHP；省略配置时默认为 `{}`，例如 `--php-builder='extensions: [swoole, mongodb]; zts: on'`。 |
 | `-r`, `--run` | 构建成功后运行。 |
 | `-j`, `--job <num>` | 并行编译任务数，默认 `4`。 |
 | `-f`, `--force` | 忽略 phpx misc 对象缓存，强制重新编译。 |
