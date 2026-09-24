@@ -421,16 +421,26 @@ abstract class UnixPlatform extends PlatformBase
 
     protected function resolvePhpLibDir(string $phpDir): ?string
     {
+        return $this->resolvePhpLibDirs($phpDir)[0] ?? null;
+    }
+
+    /** @return list<string> */
+    private function resolvePhpLibDirs(string $phpDir): array
+    {
+        $libDirs = [];
         $phpConfig = $this->findPhpConfig($phpDir);
         if ($phpConfig !== null) {
             $libDir = $this->getPhpConfigValue($phpConfig, '--lib-dir');
             if ($libDir !== null && is_dir($libDir)) {
-                return rtrim($libDir, '/');
+                $libDirs[] = rtrim($libDir, '/');
             }
         }
 
         $libDir = rtrim($phpDir, '/') . '/lib';
-        return is_dir($libDir) ? $libDir : null;
+        if (is_dir($libDir) && !in_array($libDir, $libDirs, true)) {
+            $libDirs[] = $libDir;
+        }
+        return $libDirs;
     }
 
     /**
@@ -438,8 +448,7 @@ abstract class UnixPlatform extends PlatformBase
      */
     public function buildPhpLibPaths(string $phpDir): array
     {
-        $libPath = $this->resolvePhpLibDir($phpDir);
-        return $libPath === null ? [] : [$libPath];
+        return $this->resolvePhpLibDirs($phpDir);
     }
 
     /**
@@ -447,8 +456,8 @@ abstract class UnixPlatform extends PlatformBase
      */
     public function detectPhpLibs(string $phpDir): array
     {
-        $libPath = $this->resolvePhpLibDir($phpDir);
-        if ($libPath === null) {
+        $libPaths = $this->resolvePhpLibDirs($phpDir);
+        if ($libPaths === []) {
             throw new \RuntimeException("PHP library directory not found for installation: {$phpDir}");
         }
 
@@ -459,23 +468,31 @@ abstract class UnixPlatform extends PlatformBase
         $phpConfig = $this->findPhpConfig($phpDir);
         $configuredEmbed = $phpConfig === null ? null : $this->getPhpConfigValue($phpConfig, '--lib-embed');
         if ($configuredEmbed !== null) {
-            $configuredPath = str_starts_with($configuredEmbed, '/')
-                ? $configuredEmbed
-                : $libPath . '/' . $configuredEmbed;
-            if (is_file($configuredPath)) {
-                if (str_ends_with($configuredPath, '.a')) {
-                    $staticLib = $configuredPath;
-                } else {
-                    $embedLib = $configuredPath;
+            $configuredPaths = str_starts_with($configuredEmbed, '/')
+                ? [$configuredEmbed]
+                : array_map(
+                    static fn (string $libPath): string => $libPath . '/' . $configuredEmbed,
+                    $libPaths,
+                );
+            foreach ($configuredPaths as $configuredPath) {
+                if (is_file($configuredPath)) {
+                    if (str_ends_with($configuredPath, '.a')) {
+                        $staticLib = $configuredPath;
+                    } else {
+                        $embedLib = $configuredPath;
+                    }
+                    break;
                 }
             }
         }
 
         if ($embedLib === null && $staticLib === null) {
-            $sharedCandidate = $libPath . '/libphp.' . $ext;
-            $staticCandidate = $libPath . '/libphp.a';
-            $embedLib = is_file($sharedCandidate) ? $sharedCandidate : null;
-            $staticLib = is_file($staticCandidate) ? $staticCandidate : null;
+            foreach ($libPaths as $libPath) {
+                $sharedCandidate = $libPath . '/libphp.' . $ext;
+                $staticCandidate = $libPath . '/libphp.a';
+                $embedLib ??= is_file($sharedCandidate) ? $sharedCandidate : null;
+                $staticLib ??= is_file($staticCandidate) ? $staticCandidate : null;
+            }
         }
 
         $hasEmbed = $embedLib !== null;

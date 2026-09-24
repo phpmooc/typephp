@@ -1575,6 +1575,19 @@ YAML);
         }
     }
 
+    public function testLibraryBuildDoesNotCompileExecutableProcessTitleSources(): void
+    {
+        $this->setPropertyValue('buildMode', CompilerBase::BUILD_MODE_LIB);
+        $phpxDir = $this->invokeMethod('getPhpxDir');
+
+        $sources = $this->invokeMethod('prepareNativeSourceFiles', []);
+
+        $this->assertContains($phpxDir . '/src/misc/typephp_runtime.cc', $sources);
+        $this->assertContains($phpxDir . '/src/misc/typephp_main.cc', $sources);
+        $this->assertNotContains($phpxDir . '/src/misc/php_cli_process_title.c', $sources);
+        $this->assertNotContains($phpxDir . '/src/misc/ps_title.c', $sources);
+    }
+
     public function testProjectIndependentMiscObjectCacheSurvivesTargetNameChange(): void
     {
         $phpxDir = $this->invokeMethod('getPhpxDir');
@@ -1677,24 +1690,16 @@ YAML);
             $moduleInit = substr($extension, $moduleInitStart, $moduleCleanStart - $moduleInitStart);
             $moduleClean = substr($extension, $moduleCleanStart);
             $this->assertStringNotContainsString('slot.reset()', $moduleInit, $mode);
-            if ($mode === CompilerBase::BUILD_MODE_BIN) {
-                $this->assertStringContainsString(
-                    'if (strcmp(sapi_module.name, "embed") == 0)',
-                    $moduleClean,
-                    $mode,
-                );
-                $this->assertStringContainsString(
-                    'php::setStaticProperty("RequestStaticCache", "values", php::Array{});',
-                    $moduleClean,
-                    $mode,
-                );
-            } else {
-                $this->assertStringNotContainsString(
-                    'if (strcmp(sapi_module.name, "embed") == 0)',
-                    $moduleClean,
-                    $mode,
-                );
-            }
+            $this->assertStringNotContainsString(
+                'if (strcmp(sapi_module.name, "embed") == 0)',
+                $moduleClean,
+                $mode,
+            );
+            $this->assertStringNotContainsString(
+                'php::setStaticProperty("RequestStaticCache", "values", php::Array{});',
+                $moduleClean,
+                $mode,
+            );
             $this->assertMatchesRegularExpression(
                 '/PHP_RSHUTDOWN_FUNCTION\([^)]*\)\s*\{\s*'
                     . 'php::request_shutdown\(\);\s*'

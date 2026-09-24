@@ -1614,7 +1614,7 @@ CODE;
         // minit begin
         $releaseAstConstantFns = array_unique($this->releaseAstConstantFns);
         $code .= 'PHP_MINIT_FUNCTION(' . $this->getModuleName() . ') {' . PHP_EOL;
-        if ($releaseAstConstantFns !== []) {
+        if ($releaseAstConstantFns !== [] && $this->isBuildModeExt()) {
             // Lifecycle contract for persistent enum-case AST constants: Zend's
             // internal-class teardown (destroy_zend_class) only tolerates them
             // after this module's MSHUTDOWN has released them. A temporary
@@ -1666,7 +1666,20 @@ CODE;
         if ($releaseAstConstantFns !== [] && str_contains($registrationCode, 'return FAILURE')) {
             throw new \LogicException('MINIT must not fail after class registration begins: a FAILURE return would leave persistent enum-case AST constants in the class table with no MSHUTDOWN guaranteed to release them before destroy_zend_class(). Move the fallible step before the first register_class_*() call, or release the AST constants on its failure path.');
         }
+        // A module loaded after request startup normally uses request-local
+        // interned strings. Internal class metadata (notably enum cases and
+        // persistent constant ASTs) requires process-lifetime names instead.
+        // Restrict the storage switch to the one-time MINIT registration
+        // block; RINIT/RSHUTDOWN do no extra work.
+        $code .= 'if (type == MODULE_TEMPORARY) {' . PHP_EOL;
+        $code .= $this->getIndent() . 'EG(current_module)->type = MODULE_PERSISTENT;' . PHP_EOL;
+        $code .= $this->getIndent() . 'zend_interned_strings_switch_storage(false);' . PHP_EOL;
+        $code .= '}' . PHP_EOL;
         $code .= $registrationCode;
+        $code .= 'if (type == MODULE_TEMPORARY) {' . PHP_EOL;
+        $code .= $this->getIndent() . 'zend_interned_strings_switch_storage(true);' . PHP_EOL;
+        $code .= $this->getIndent() . 'EG(current_module)->type = MODULE_TEMPORARY;' . PHP_EOL;
+        $code .= '}' . PHP_EOL;
         $code .= 'return SUCCESS;' . PHP_EOL;
         $code .= '}' . PHP_EOL . PHP_EOL;
         // minit end
@@ -1791,28 +1804,6 @@ CODE;
         }
         foreach ($this->nativeStaticInitializers as $name => $_) {
             $code .= $this->escapeGlobalVar($name) . ' = false;' . PHP_EOL;
-        }
-        if ($this->isBuildModeBin() && (!$this->isSapiBuild() || $this->hasSapi('embed'))) {
-            // Embed registers the generated module after request startup and
-            // unloads that temporary module before Zend tears down class
-            // statics. Release only static array caches which may retain
-            // Reflection objects pointing into the temporary module. This is
-            // deliberately skipped for ext/CLI/FPM request shutdown.
-            $code .= 'if (strcmp(sapi_module.name, "embed") == 0) {' . PHP_EOL;
-            foreach ($this->symbols->classes() as $classDef) {
-                if ($classDef->trait) {
-                    continue;
-                }
-                foreach ($classDef->properties as $property) {
-                    if (!$property->isStatic() || !$property->arrayInitPlan) {
-                        continue;
-                    }
-                    $code .= $this->getIndent(2) . 'php::setStaticProperty('
-                        . $this->genCharPtr($classDef->getNamespacedName(false), true) . ', '
-                        . $this->genCharPtr($property->name) . ', php::Array{});' . PHP_EOL;
-                }
-            }
-            $code .= '}' . PHP_EOL;
         }
         $code .= $this->genRequestArrayDefaultCleanup();
         foreach ($this->constants as $name => $const) {
@@ -2006,6 +1997,11 @@ CODE;
             if (!$this->isSapiBuild() || $this->hasSapi('embed')) {
                 $code .= 'TYPEPHP_EMBED_GET_MODULE_FUNCTION(' . $this->targetName . ') {' . PHP_EOL;
                 $code .= $this->getIndent() . 'return &' . $projectNamespace . '::' . $moduleName . '_module_entry;' . PHP_EOL;
+                $code .= '}' . PHP_EOL . PHP_EOL;
+                $code .= 'TYPEPHP_EMBED_PRE_SHUTDOWN_FUNCTION(' . $this->targetName . ') {' . PHP_EOL;
+                foreach ($releaseAstConstantFns as $releaseAstConstantFn) {
+                    $code .= $this->getIndent() . $releaseAstConstantFn . '();' . PHP_EOL;
+                }
                 $code .= '}' . PHP_EOL;
             }
         } else {
@@ -2486,7 +2482,7 @@ CODE;
             array_push($sourceFiles, ...$this->getEmbeddedRuntimeSources());
         }
 
-        if (($this->isBuildModeBin() || $this->hasSapi('embed'))
+        if ($this->isBuildModeBin()
             && !$this->isWasiTarget()
             && !$this->isIosTarget()) {
             $sourceFiles[] = $this->getPhpxDir() . '/src/misc/php_cli_process_title.c';

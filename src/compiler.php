@@ -9,6 +9,7 @@ use TypePhp\Build\NativeSourceProjectConfig;
 use TypePhp\Build\ProjectBuildRunner;
 use TypePhp\PythonTools\Command as PythonToolsCommand;
 use TypePhp\Cli\CompletionCommand;
+use TypePhp\Resolver\Reflection as ReflectionResolver;
 
 function main(int $argc, array $argv): void
 {
@@ -20,6 +21,14 @@ function runCompiler(int $argc, array $argv, CompilerRuntime $runtime): void
     // Compiling a complete project keeps the parsed AST and generated sources in
     // memory. The default CLI limit (commonly 128M) is too small for larger builds.
     ini_set('memory_limit', '-1');
+
+    // The late-loaded embed module is unloaded before PHP's object store. Drop
+    // cached reflector wrappers while their referenced internal symbols are
+    // still alive. Embed serves one request per compiler process; never add
+    // this traversal to an extension/CLI/FPM request-shutdown path.
+    if (php_sapi_name() === 'embed') {
+        register_shutdown_function([ReflectionResolver::class, 'clearCaches']);
+    }
 
     // The PHP entrypoint already loaded Composer's project autoloader in
     // bin/bootstrap.php. The native binary loads its embedded copy here.
